@@ -49,6 +49,14 @@ def vinyl_activity(activities):
     return None
 
 
+def _describe(a):
+    """Short human description of any activity, for the log and /nowspinning status."""
+    kind = getattr(getattr(a, "type", None), "name", "") or ""
+    if kind == "custom":
+        return "a custom status"
+    return f"{kind} {getattr(a, 'name', '') or ''}".strip() or "an activity"
+
+
 def record_from_activity(a):
     """What's playing, as far as the status tells: {'key', 'release_id', 'title', 'artist', 'cover', 'url'}."""
     assets = a.assets or {}
@@ -98,7 +106,7 @@ class NowSpinningBot(discord.Client if discord else object):
         self.store = store
         self.tree = app_commands.CommandTree(self)
         self.pending = {}  # (guild id, member id) -> (record key, task)
-        self.posted = {}  # (guild id, member id, record key) -> time
+        self.last_seen = {}  # (guild id, member id) -> what we last logged, so the log isn't flooded
         self._add_commands()
 
     def _add_commands(self):
@@ -113,7 +121,15 @@ class NowSpinningBot(discord.Client if discord else object):
             where = f"<#{g['channel']}>" if g.get("channel") else "the now-spinning channel (an admin still has to pick it)"
             await interaction.response.send_message(
                 f"You're in! Records you play with Vinyl Presence will be posted in {where}. "
-                "Turn it off any time with /nowspinning off.", ephemeral=True)
+                "Turn it off any time with /nowspinning off, or check what I see with /nowspinning status.",
+                ephemeral=True)
+            member = interaction.guild.get_member(interaction.user.id)
+            if member:
+                self._consider(member, "just opted in")  # a record that's already playing counts too
+
+        @group.command(name="status", description="What the bot can see of your Vinyl Presence right now")
+        async def status(interaction: discord.Interaction):
+            await interaction.response.send_message(self._status_text(interaction), ephemeral=True)
 
         @group.command(name="off", description="Stop posting the records I play")
         async def turn_off(interaction: discord.Interaction):
@@ -142,9 +158,50 @@ class NowSpinningBot(discord.Client if discord else object):
         print(f"[bot] online as {self.user} in {len(self.guilds)} server(s)")
         for guild in self.guilds:
             await self._sync_guild(guild)
+            self._consider_all(guild, "already playing when the bot started")
 
     async def on_guild_join(self, guild):
+        print(f"[bot] joined {guild.name}")
         await self._sync_guild(guild)
+        self._consider_all(guild, "already playing when the bot joined")
+
+    def _consider_all(self, guild, reason):
+        g = self.store.guilds.get(str(guild.id)) or {}
+        for member_id in g.get("members", []):
+            member = guild.get_member(member_id)
+            if member:
+                self._consider(member, reason)
+
+    def _status_text(self, interaction):
+        g = self.store.guild(interaction.guild_id)
+        member = interaction.guild.get_member(interaction.user.id)
+        lines = [f"Channel: <#{g['channel']}>" if g.get("channel")
+                 else "Channel: not set yet. An admin types /nowspinning channel in the channel to use."]
+        opted_in = interaction.user.id in g["members"]
+        lines.append("You: opted in ✅" if opted_in else "You: not opted in. Type /nowspinning on to join.")
+        activities = member.activities if member else ()
+        act = vinyl_activity(activities)
+        if act:
+            r = record_from_activity(act)
+            lines.append(f"I can see you playing **{r['title']}** by {r['artist']} with Vinyl Presence.")
+            slot = (interaction.guild_id, interaction.user.id)
+            if slot in self.pending and self.pending[slot][0] == r["key"]:
+                lines.append("It'll be posted once it has played for 30 seconds.")
+            elif self._recently_posted(g, interaction.user.id, r["key"]):
+                lines.append("It's already been posted.")
+        elif activities:
+            lines.append("I can see your status, but no Vinyl Presence record in it: "
+                         + ", ".join(_describe(a) for a in activities) + ".")
+        else:
+            lines.append("I can't see any activity in your status. Is Vinyl Presence playing a record? Also check "
+                         "that your status isn't Invisible and that Settings → Activity Privacy → Share your "
+                         "detected activities is on.")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _recently_posted(g, member_id, key):
+        last = (g.get("posted") or {}).get(str(member_id))
+        return bool(last) and last["key"] == str(key) and time.time() - last["at"] < REPOST_AFTER_SECONDS
 
     async def _sync_guild(self, guild):
         try:
@@ -154,45 +211,67 @@ class NowSpinningBot(discord.Client if discord else object):
             print(f"[bot] couldn't add commands to {guild.name}: {e}")
 
     async def on_presence_update(self, before, after):
-        g = self.store.guilds.get(str(after.guild.id))
-        if not g or not g.get("channel") or after.id not in g["members"]:
+        self._consider(after, "status changed")
+
+    def _log_once(self, member, text):
+        slot = (member.guild.id, member.id)
+        if self.last_seen.get(slot) != text:
+            self.last_seen[slot] = text
+            print(f"[bot] {member.display_name}: {text}")
+
+    def _consider(self, member, reason):
+        """Start the 30-second wait when an opted-in member's status shows a (new) record."""
+        g = self.store.guilds.get(str(member.guild.id))
+        if not g or not g.get("channel") or member.id not in g["members"]:
             return
-        act = vinyl_activity(after.activities)
-        slot = (after.guild.id, after.id)
+        act = vinyl_activity(member.activities)
+        slot = (member.guild.id, member.id)
         current = self.pending.get(slot)
         if not act:
             if current:
                 current[1].cancel()
                 del self.pending[slot]
+            shown = ", ".join(_describe(a) for a in member.activities) or "no activity"
+            self._log_once(member, f"no Vinyl Presence record in their status ({shown})")
             return
         record = record_from_activity(act)
         if current and current[0] == record["key"]:
             return  # same record, already waiting (track or side changes don't matter)
+        if self._recently_posted(g, member.id, record["key"]):
+            self._log_once(member, f"{record['artist']} - {record['title']} was already posted")
+            return
         if current:
             current[1].cancel()
-        self.pending[slot] = (record["key"], asyncio.create_task(self._post_later(after.guild, after.id, record)))
+        self._log_once(member, f"{record['artist']} - {record['title']} ({reason}); posting in "
+                               f"{POST_AFTER_SECONDS} s if it keeps playing")
+        self.pending[slot] = (record["key"], asyncio.create_task(self._post_later(member.guild, member.id, record)))
 
     async def _post_later(self, guild, member_id, record):
         try:
             await asyncio.sleep(POST_AFTER_SECONDS)
         except asyncio.CancelledError:
             return
+        slot = (guild.id, member_id)
+        if self.pending.get(slot, (None,))[0] == record["key"]:
+            del self.pending[slot]
         member = guild.get_member(member_id)
         act = vinyl_activity(member.activities) if member else None
         if not act or record_from_activity(act)["key"] != record["key"]:
             return  # they switched records or stopped within 30 seconds
-        seen = (guild.id, member_id, record["key"])
-        if time.time() - self.posted.get(seen, 0) < REPOST_AFTER_SECONDS:
-            return
-        channel = guild.get_channel(self.store.guild(guild.id).get("channel") or 0)
+        g = self.store.guild(guild.id)
+        channel = guild.get_channel(g.get("channel") or 0)
         if channel is None:
+            print("[bot] the now-spinning channel is gone; type /nowspinning channel in the new one")
             return
-        self.posted[seen] = time.time()
         try:
             await channel.send(embed=await self._embed(member, record))
-            print(f"[bot] posted {record['artist']} - {record['title']} for {member.display_name}")
         except discord.HTTPException as e:
-            print(f"[bot] couldn't post in #{channel}: {e}")
+            print(f"[bot] couldn't post in #{channel} (does the bot have View Channel, Send Messages and "
+                  f"Embed Links there?): {e}")
+            return
+        g.setdefault("posted", {})[str(member_id)] = {"key": str(record["key"]), "at": time.time()}
+        self.store.save()
+        self._log_once(member, f"posted {record['artist']} - {record['title']}")
 
     async def _embed(self, member, record):
         info = {"title": record["title"], "artist": record["artist"], "year": "", "label": "", "format": "",

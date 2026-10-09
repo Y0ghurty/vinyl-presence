@@ -157,6 +157,7 @@ class PresenceWorker(threading.Thread):
         self._ipc = None
         self._compat = 0
         self._last_send = 0.0
+        self._cleared = False  # True once "nothing playing" has been sent on this connection
         self.status = {"state": "starting", "user": None, "error": None}
 
     def set_client_id(self, client_id):
@@ -211,6 +212,9 @@ class PresenceWorker(threading.Thread):
                               if user.get("id") and user.get("avatar") else None)
                     self.status = {"state": "connected", "user": name, "avatar": avatar, "error": None}
                     print(f"[discord] connected as {name}")
+                    self._cleared = False
+                if activity is None and self._cleared:
+                    continue  # nothing playing and already cleared: don't keep clearing (it can blank other apps)
                 self._send(activity)
             except InvalidClientId as e:
                 self._disconnect()
@@ -225,6 +229,7 @@ class PresenceWorker(threading.Thread):
             try:
                 self._last_send = time.monotonic()
                 resp = self._ipc.set_activity(_downgrade(activity, self._compat))
+                self._cleared = activity is None
                 self.status["error"] = None
                 self._check_name(activity, resp)
                 return
