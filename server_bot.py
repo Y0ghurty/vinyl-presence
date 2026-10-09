@@ -33,6 +33,12 @@ def available():
     return discord is not None
 
 
+def invite_url(app_id):
+    """Adds the bot user itself (scope "bot"), not only its slash commands."""
+    return (f"https://discord.com/oauth2/authorize?client_id={app_id}"
+            f"&scope=bot+applications.commands&permissions={INVITE_PERMISSIONS}")
+
+
 # ---------------------------------------------------------------- reading a member's status
 
 def vinyl_activity(activities):
@@ -114,6 +120,8 @@ class NowSpinningBot(discord.Client if discord else object):
 
         @group.command(name="on", description="Post the records I play in the now-spinning channel")
         async def turn_on(interaction: discord.Interaction):
+            if await self._not_in_server(interaction):
+                return
             g = self.store.guild(interaction.guild_id)
             if interaction.user.id not in g["members"]:
                 g["members"].append(interaction.user.id)
@@ -129,10 +137,14 @@ class NowSpinningBot(discord.Client if discord else object):
 
         @group.command(name="status", description="What the bot can see of your Vinyl Presence right now")
         async def status(interaction: discord.Interaction):
+            if await self._not_in_server(interaction):
+                return
             await interaction.response.send_message(self._status_text(interaction), ephemeral=True)
 
         @group.command(name="off", description="Stop posting the records I play")
         async def turn_off(interaction: discord.Interaction):
+            if await self._not_in_server(interaction):
+                return
             g = self.store.guild(interaction.guild_id)
             if interaction.user.id in g["members"]:
                 g["members"].remove(interaction.user.id)
@@ -142,6 +154,8 @@ class NowSpinningBot(discord.Client if discord else object):
         @group.command(name="channel", description="Admins: post now-spinning records in this channel")
         @app_commands.default_permissions(manage_guild=True)
         async def set_channel(interaction: discord.Interaction):
+            if await self._not_in_server(interaction):
+                return
             g = self.store.guild(interaction.guild_id)
             g["channel"] = interaction.channel_id
             self.store.save()
@@ -156,6 +170,9 @@ class NowSpinningBot(discord.Client if discord else object):
 
     async def on_ready(self):
         print(f"[bot] online as {self.user} in {len(self.guilds)} server(s)")
+        if not self.guilds:
+            print(f"[bot] not in any server yet. Add it with this link (the Developer Portal's install link "
+                  f"only adds the commands): {invite_url(self.application_id)}")
         for guild in self.guilds:
             await self._sync_guild(guild)
             self._consider_all(guild, "already playing when the bot started")
@@ -164,6 +181,16 @@ class NowSpinningBot(discord.Client if discord else object):
         print(f"[bot] joined {guild.name}")
         await self._sync_guild(guild)
         self._consider_all(guild, "already playing when the bot joined")
+
+    async def _not_in_server(self, interaction):
+        """Commands also work where only the app's commands were installed, but then the bot can't see or post."""
+        if interaction.guild_id and self.get_guild(interaction.guild_id):
+            return False
+        await interaction.response.send_message(
+            "I'm not really in this server yet: only my commands were added, so I can't see anyone's status or "
+            "post. The server owner can fix it by adding me with this link (it adds the bot itself): "
+            f"{invite_url(self.application_id)}", ephemeral=True)
+        return True
 
     def _consider_all(self, guild, reason):
         g = self.store.guilds.get(str(guild.id)) or {}
@@ -369,10 +396,7 @@ class BotRunner:
 
     def invite_url(self):
         app_id = self.status.get("app_id")
-        if not app_id:
-            return None
-        return (f"https://discord.com/oauth2/authorize?client_id={app_id}"
-                f"&scope=bot+applications.commands&permissions={INVITE_PERMISSIONS}")
+        return invite_url(app_id) if app_id else None
 
     def stop(self):
         if self._client and self._loop and self._loop.is_running():

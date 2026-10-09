@@ -1012,7 +1012,8 @@ class VinylApp:
             "click Reset Token and copy it.",
             "2.  On that same Bot page, switch on Presence Intent and Server Members Intent, then Save.",
             "3.  Paste the token below, tick Run the bot, and click Save.",
-            "4.  Click Invite the bot (appears below once it's online) and add it to your server.",
+            "4.  Click Invite the bot (appears below once it's online) and add it to your server. Use this link, "
+            "not the Developer Portal's install link: that one only adds the commands, not the bot.",
             "5.  In your now-spinning channel, type /nowspinning channel. Members type /nowspinning on.",
             "Tip: if you also had Post what I play on (Sharing & tray) for that channel, turn it off and type "
             "/nowspinning on yourself, so your records aren't posted twice.",
@@ -1054,13 +1055,18 @@ class VinylApp:
                     "error": (f"Bot error: {d.get('error')}", BAD),
                 }.get(d["state"], ("", MUTED))
                 if d["state"] == "online":
-                    if "name" in d:
+                    if "name" in d and not d["servers"]:
+                        text = (f"Online as {d['name']}, but it isn't in any server yet. Add it with Invite the bot "
+                                "below. (The Developer Portal's install link only adds the commands, so the bot "
+                                "can't see anyone or post.)")
+                        color = WARN
+                    elif "name" in d:
                         text = (f"● Online as {d['name']} · {d['servers']} server(s) · "
                                 f"{'channel set' if d['channels'] else 'no channel yet: type /nowspinning channel'}"
                                 f" · {d['members']} member(s) opted in")
+                        color = GOOD
                     else:
-                        text = "Online, getting ready…"
-                    color = GOOD
+                        text, color = "Online, getting ready…", GOOD
                 bot_status.config(text=text, fg=color)
                 if self.core.bot.invite_url():
                     bot_invite.grid(row=invite_row, column=0, columnspan=2, sticky="w", pady=(px(4), 0))

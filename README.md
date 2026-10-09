@@ -108,6 +108,8 @@ Members only type `/nowspinning on` in your server; they never see a secret.
 2. On that same Bot page, switch on **Presence Intent** and **Server Members Intent**, then save.
 3. In Vinyl Presence, open *Settings → Server bot*, paste the token, tick **Run the bot** and click **Save**.
 4. Click **Invite the bot to your server** (it appears once the bot is online) and add it to your server.
+   Use this link rather than the Developer Portal's install link: that one only adds the slash commands,
+   not the bot itself, so the bot couldn't see anyone's status or post.
 5. In your now-spinning channel, type `/nowspinning channel`. Members join with `/nowspinning on` and
    leave with `/nowspinning off`.
 
