@@ -15,6 +15,7 @@ from pathlib import Path
 
 import share
 from discord_ipc import PresenceWorker
+from server_bot import BotRunner
 from metadata import USER_AGENT, Library, clean_name, norm
 
 SOURCE_DIR = Path(__file__).resolve().parent
@@ -59,6 +60,9 @@ DEFAULT_CONFIG = {
     # Post records you play to a Discord channel through a webhook
     "share_enabled": False,
     "share_webhook": "",
+    # Server owners: run a bot that posts what members play (they opt in with /nowspinning on)
+    "bot_enabled": False,
+    "bot_token": "",
 }
 SIDE_END_CLEAR_MINUTES = 10
 SHARE_AFTER_SECONDS = 30  # a record must play this long before it's posted, so mis-clicks aren't
@@ -193,6 +197,15 @@ class Core:
         self.player = Player(self)
         threading.Thread(target=self._watch_assets, daemon=True, name="assets").start()
         self.load_collection()
+        self.bot = BotRunner(DATA / "bot.json")
+        self._apply_bot()
+
+    def _apply_bot(self):
+        token = self.config["bot_token"].strip()
+        if self.config["bot_enabled"] and token:
+            self.bot.start(token)
+        else:
+            self.bot.stop()
 
     def _watch_assets(self):
         """Check which images are uploaded to the Discord app, so we never point at a missing badge."""
@@ -244,6 +257,7 @@ class Core:
 
     def update_config(self, changes):
         token_changed = changes.get("discogs_token", self.config["discogs_token"]) != self.config["discogs_token"]
+        bot_changed = any(changes.get(k, self.config[k]) != self.config[k] for k in ("bot_enabled", "bot_token"))
         for key, value in changes.items():
             if key in DEFAULT_CONFIG:
                 self.config[key] = type(DEFAULT_CONFIG[key])(value)
@@ -252,6 +266,8 @@ class Core:
         self._assets_wake.set()
         if token_changed and self.config["discogs_token"]:
             self.library.prefetch(list(self.records.values()))
+        if bot_changed:
+            threading.Thread(target=self._apply_bot, daemon=True, name="bot-restart").start()
         self.player.push()
 
     def add_history(self, rid):
@@ -285,6 +301,7 @@ class Core:
     def shutdown(self):
         self.player.flush()
         self.library.save()
+        self.bot.stop()
         self.discord.shutdown()
 
 

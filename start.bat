@@ -6,6 +6,6 @@ where pythonw >nul 2>nul || (
   pause
   exit /b 1
 )
-rem Pillow (album covers) and pystray (tray icon) are optional extras. Installed once, if missing.
-python -c "import PIL, pystray" 2>nul || python -m pip install --user --quiet -r "%~dp0requirements.txt"
+rem Pillow (covers), pystray (tray icon) and discord.py (server bot) are optional. Installed once, if missing.
+python -c "import PIL, pystray, discord" 2>nul || python -m pip install --user --quiet -r "%~dp0requirements.txt"
 start "" pythonw "%~dp0app.py"

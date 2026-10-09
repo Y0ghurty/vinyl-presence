@@ -1,3 +1,4 @@
 # Optional extras; everything else uses only the standard library.
-pillow   # album covers in the window and the cover view
-pystray  # tray icon
+pillow      # album covers in the window and the cover view
+pystray     # tray icon
+discord.py  # the now-spinning bot for server owners

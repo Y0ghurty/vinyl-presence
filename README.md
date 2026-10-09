@@ -23,7 +23,8 @@ spinning actual vinyl:
   itself, and asks you to flip the record when a side ends.
 - **Cover view:** browse your collection as a wall of album covers, like flipping through your shelf.
 - **Listening stats:** hours listened, your most played records and artists, and hours per month.
-- **Now spinning channel:** optionally post what you play to a channel in a Discord server.
+- **Now spinning channel:** optionally post what you play to a channel in a Discord server, or, as a
+  server owner, run a bot that posts what all your members play.
 - **Stays out of the way:** it runs in the tray next to the clock and can start with Windows.
 - **A normal Windows app:** nothing to host, no account, no server.
 
@@ -94,7 +95,25 @@ aren't, it shows the album with an elapsed timer.
 A server admin opens the channel's settings in Discord (*Edit Channel → Integrations → Webhooks →
 New Webhook*), then clicks **Copy Webhook URL**. Paste it under *Settings → Sharing & tray*, tick
 **Post what I play** and click **Send test**. Anyone who has a webhook URL can post in that channel, so
-only share it with people you trust.
+only share it with people you trust. For a whole server, use the bot below instead.
+
+### Running a now-spinning bot for your server
+
+For server owners who want *members* to show up in the channel without handing out a webhook. While
+your Vinyl Presence is open, a bot watches the members' Discord status and posts the records they play.
+Members only type `/nowspinning on` in your server; they never see a secret.
+
+1. In the [Discord Developer Portal](https://discord.com/developers/applications), click **New Application**
+   (for example "Vinyl Hangout"), open **Bot**, click **Reset Token** and copy the token.
+2. On that same Bot page, switch on **Presence Intent** and **Server Members Intent**, then save.
+3. In Vinyl Presence, open *Settings → Server bot*, paste the token, tick **Run the bot** and click **Save**.
+4. Click **Invite the bot to your server** (it appears once the bot is online) and add it to your server.
+5. In your now-spinning channel, type `/nowspinning channel`. Members join with `/nowspinning on` and
+   leave with `/nowspinning off`.
+
+A record is posted once it has played for 30 seconds, under the member's name and avatar, with the cover
+and a Discogs link. The bot only runs while your Vinyl Presence is open (it can live in the tray and start
+with Windows).
 
 ## What goes online
 
@@ -104,6 +123,7 @@ only share it with people you trust.
 - **GitHub:** checks once per start whether a newer version is out.
 - **Your Discord channel:** only if you turn on *Post what I play*, and only the record's title,
   artist, cover and Discogs link.
+- **Server bot:** only if you run one; it connects to Discord as your bot.
 
 Your collection, history and stats never leave your PC.
 
@@ -115,7 +135,7 @@ You need [Python](https://www.python.org/downloads/) 3.10 or newer.
 git clone https://github.com/Y0ghurty/vinyl-presence.git
 ```
 
-Then double-click `start.bat` (it installs Pillow and pystray the first time), or run `pythonw app.py`. When you run it from source, settings and data
+Then double-click `start.bat` (it installs Pillow, pystray and discord.py the first time), or run `pythonw app.py`. When you run it from source, settings and data
 are kept in the project folder, and you can also drop your Discogs CSV in there instead of importing it.
 
 | File | What it does |
@@ -127,6 +147,7 @@ are kept in the project folder, and you can also drop your Discogs CSV in there 
 | `covers.py` | The cover wall and its thumbnail cache |
 | `stats.py`, `stats_view.py` | Listening stats and the window that shows them |
 | `share.py` | Posts "now spinning" messages to a Discord webhook |
+| `server_bot.py` | The optional now-spinning bot for server owners |
 | `tray.py` | The tray icon and Start with Windows |
 | `updater.py` | Checks GitHub for a newer release and lets the exe update itself |
 | `version.py` | Version number, set automatically for releases |

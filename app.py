@@ -20,6 +20,7 @@ import webbrowser
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
+import server_bot
 import share
 import tray
 import updater
@@ -995,9 +996,82 @@ class VinylApp:
         if sys.platform != "win32":
             startup_cb.config(state="disabled")
 
+        # ---- Server bot (for server owners)
+        f = tab("Server bot")
+        tk.Label(f, text="Now-spinning bot for your server", bg=BG, fg=TEXT, font=(FONT, 11, "bold"),
+                 anchor="w").grid(row=f.row, column=0, columnspan=2, sticky="w")
+        f.row += 1
+        tk.Label(f, text="For server owners. While Vinyl Presence is open, a bot posts the records your members "
+                         "play in a channel. Members don't need a webhook or any setup: they type /nowspinning on "
+                         "in your server, and the bot sees their status.",
+                 bg=BG, fg=MUTED, font=(FONT, 9), anchor="w", justify="left", wraplength=px(540)).grid(
+            row=f.row, column=0, columnspan=2, sticky="w", pady=(px(2), px(6)))
+        f.row += 1
+        bot_steps = [
+            "1.  In the Discord Developer Portal, click New Application (e.g. \"Vinyl Hangout\"), open Bot, "
+            "click Reset Token and copy it.",
+            "2.  On that same Bot page, switch on Presence Intent and Server Members Intent, then Save.",
+            "3.  Paste the token below, tick Run the bot, and click Save.",
+            "4.  Click Invite the bot (appears below once it's online) and add it to your server.",
+            "5.  In your now-spinning channel, type /nowspinning channel. Members type /nowspinning on.",
+            "Tip: if you also had Post what I play on (Sharing & tray) for that channel, turn it off and type "
+            "/nowspinning on yourself, so your records aren't posted twice.",
+        ]
+        for s_ in bot_steps:
+            tk.Label(f, text=s_, bg=BG, fg=MUTED, font=(FONT, 9), anchor="w", justify="left",
+                     wraplength=px(540)).grid(row=f.row, column=0, columnspan=2, sticky="w", pady=(px(2), 0))
+            f.row += 1
+        v_bot = tk.BooleanVar(value=cfg["bot_enabled"])
+        bot_cb = check(f, "Run the bot while Vinyl Presence is open", v_bot, column=0)
+        f.row += 1
+        v_bot_token = tk.StringVar(value=cfg["bot_token"])
+        label(f, "Bot token", "Keep it private: it's the bot's password. It stays on this PC.")
+        self.make_entry(f, v_bot_token, show="•", width=30).grid(row=f.row, column=1, sticky="ew", ipady=px(3))
+        f.row += 2
+        bot_status = tk.Label(f, bg=BG, fg=MUTED, font=(FONT, 9), anchor="w", justify="left", wraplength=px(540))
+        bot_status.grid(row=f.row, column=0, columnspan=2, sticky="w", pady=(px(10), 0))
+        f.row += 1
+        bot_invite = tk.Label(f, text="Invite the bot to your server ↗", bg=BG, fg=ACCENT, cursor="hand2",
+                              font=(FONT, 9, "underline"))
+        bot_invite.bind("<Button-1>", lambda e: self.core.bot.invite_url() and webbrowser.open(self.core.bot.invite_url()))
+        invite_row = f.row
+        f.row += 1
+        if not server_bot.available():
+            bot_cb.config(state="disabled")
+            bot_status.config(text="The bot needs the discord.py package (pip install discord.py).", fg=FAINT)
+
+        def refresh_bot_status():
+            if not w.winfo_exists():
+                return
+            if server_bot.available():
+                d = self.core.bot.details()
+                text, color = {
+                    "off": ("Bot is off.", FAINT),
+                    "connecting": ("Connecting…", WARN),
+                    "bad_token": ("Discord rejected the token. Copy it again from the Bot page.", BAD),
+                    "intents": ("Switch on Presence Intent and Server Members Intent on the Bot page, then restart "
+                                "the bot (untick, Save, tick, Save).", BAD),
+                    "error": (f"Bot error: {d.get('error')}", BAD),
+                }.get(d["state"], ("", MUTED))
+                if d["state"] == "online":
+                    if "name" in d:
+                        text = (f"● Online as {d['name']} · {d['servers']} server(s) · "
+                                f"{'channel set' if d['channels'] else 'no channel yet: type /nowspinning channel'}"
+                                f" · {d['members']} member(s) opted in")
+                    else:
+                        text = "Online, getting ready…"
+                    color = GOOD
+                bot_status.config(text=text, fg=color)
+                if self.core.bot.invite_url():
+                    bot_invite.grid(row=invite_row, column=0, columnspan=2, sticky="w", pady=(px(4), 0))
+                else:
+                    bot_invite.grid_remove()
+            w.after(1000, refresh_bot_status)
+        refresh_bot_status()
+
         # What the settings were when the window opened (or last saved), to spot unsaved changes
         watched = [v_client, v_card, v_card_text, v_status, v_button, v_asset, v_token, v_auto, v_flip,
-                   v_share, v_hook, v_tray, v_startup]
+                   v_share, v_hook, v_tray, v_startup, v_bot, v_bot_token]
         baseline = {str(v): v.get() for v in watched}
 
         def close_settings():
@@ -1023,6 +1097,11 @@ class VinylApp:
                 messagebox.showerror("Settings", "To post what you play, paste the channel's webhook URL. It starts "
                                      "with https://discord.com/api/webhooks/", parent=w)
                 return
+            if v_bot.get() and not v_bot_token.get().strip():
+                tabs.select(3)
+                messagebox.showerror("Settings", "To run the bot, paste its token (Developer Portal → your "
+                                     "application → Bot → Reset Token).", parent=w)
+                return
             try:
                 flip_s = max(0, int(v_flip.get()))
             except ValueError:
@@ -1035,6 +1114,7 @@ class VinylApp:
                 "show_discogs_button": v_button.get(), "vinyl_asset": v_asset.get().strip(),
                 "discogs_token": v_token.get().strip(), "auto_continue": v_auto.get(), "flip_seconds": flip_s,
                 "share_enabled": v_share.get(), "share_webhook": hook_url, "close_to_tray": v_tray.get(),
+                "bot_enabled": v_bot.get(), "bot_token": v_bot_token.get().strip(),
             })
             if v_startup.get() != tray.startup_enabled():
                 try:
