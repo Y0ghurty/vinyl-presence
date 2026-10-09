@@ -1,0 +1,11 @@
+# Your own settings, history and collection stay on your PC
+config.json
+data/
+*.csv
+/vinyl.png
+
+# Python / build output
+__pycache__/
+build/
+dist/
+*.spec
