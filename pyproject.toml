@@ -1,0 +1,29 @@
+[project]
+name = "vinyl-presence"
+version = "1.4.0"
+description = "Spotify-style Discord status for the records on your real turntable — pick the record, your profile shows the cover, track and progress."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+keywords = ["discord", "discogs", "rich-presence", "vinyl", "turntable"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+    "Topic :: Desktop Environment",
+]
+
+# The app is run as a bundled .exe (PyInstaller via start.bat). These are the
+# optional runtime extras; the core (Discogs API, Discord IPC, history, stats)
+# is pure stdlib. Declared so `pip install -e ".[all]"` gives a dev environment.
+[project.optional-dependencies]
+all = ["pillow", "pystray", "discord.py>=2.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff.lint]
+select = ["F", "E9"]
+# App modules use tkinter widgets and optional PIL imports that shift line
+# lengths; keep linting to bug-catchers only (unused/undefined, syntax).

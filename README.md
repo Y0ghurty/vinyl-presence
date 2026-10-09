@@ -155,6 +155,26 @@ are kept in the project folder, and you can also drop your Discogs CSV in there 
 | `updater.py` | Checks GitHub for a newer release and lets the exe update itself |
 | `version.py` | Version number, set automatically for releases |
 
+## Developing and testing
+
+The core logic (collection import, search, the Player state machine, stats,
+Discogs/Deezer parsing, the Discord IPC framing) is pure Python with no UI or
+service dependency, so it runs offline. The GUI modules (`app.py`,
+`stats_view.py`, `tray.py`, `covers.py`) are excluded — they need tkinter and
+PIL — but everything they drive is covered directly.
+
+```bash
+python -m venv .venv
+. .venv/bin/activate            # Windows: .venv\Scripts\activate
+pip install -e ".[all]" pytest ruff
+pytest tests/                   # 72 tests, no network, no Discord, no display
+ruff check .                    # bug-catching lints only (F, E9)
+```
+
+`tests/conftest.py` stands in for the GUI/network plumbing with lightweight
+doubles (a fake clock, a fake Discord client, a stub library) so the Player
+state machine and payload builders can be tested deterministically.
+
 ## Publishing a new version
 
 Push a tag:
