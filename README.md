@@ -50,7 +50,8 @@ downloads and installs it, and the app restarts by itself. If a record is playin
    Scroll down to *Rich Presence Assets* (not the Invite Image), click **Add Image(s)**, upload
    `vinyl.png`, name it `vinyl` and save. *Settings → Show vinyl.png* in the app shows you where the
    file is. It puts a small record on the album cover ("Spinning on my turntable").
-3. **Export your collection** on Discogs: *Collection → Export → Download* the CSV.
+3. **Your collection:** type your Discogs username in *Settings → Records* and it syncs by itself
+   (at startup and every 6 hours). Or export the CSV on Discogs (*Collection → Export*) and import it.
 4. **Start Vinyl Presence.** Settings opens on the first run. Paste the Application ID, click
    *Import Discogs CSV…* and choose your export, then click **Save**. The dot in the top right turns
    green: *Discord connected*.

@@ -16,7 +16,7 @@ from pathlib import Path
 import share
 from discord_ipc import PresenceWorker
 from server_bot import BotRunner
-from metadata import USER_AGENT, Library, clean_name, norm
+from metadata import USER_AGENT, CollectionError, Library, clean_name, fetch_collection, norm
 
 SOURCE_DIR = Path(__file__).resolve().parent
 # Bundled files. Inside the .exe, PyInstaller unpacks them to a temporary folder (_MEIPASS).
@@ -34,10 +34,14 @@ CONFIG_PATH = ROOT / "config.json"
 HISTORY_PATH = DATA / "history.json"
 RESUME_PATH = DATA / "resume.json"
 IMPORTED_CSV = DATA / "collection.csv"
+SYNCED_PATH = DATA / "discogs_collection.json"  # last collection synced by username
+SYNC_EVERY_HOURS = 6
 
 DEFAULT_CONFIG = {
     "discord_client_id": "",
     "discogs_token": "",
+    # Load the collection straight from Discogs by username (instead of a CSV export)
+    "discogs_username": "",
     # Title of the status card ("Listening to ___"): "app" (the name of your Discord application,
     # e.g. "My Record Player"), "artist", "album" or "custom" (card_title_text)
     "card_title": "app",
@@ -129,12 +133,16 @@ def parse_collection(text):
             "year": year if year.isdigit() and year != "0" else "",
             "added": (row.get("Date Added") or "").strip(),
         }
-        # Pre-normalized fields for fast, accent-insensitive search
-        rec["_a"], rec["_t"] = norm(rec["artist"]), norm(rec["title"])
-        rec["_h"] = norm(" ".join(rec[k] for k in ("artist", "title", "label", "catno", "year", "format")))
-        rec["_w"] = rec["_h"].split()
-        records[rid] = rec
+        records[rid] = index_record(rec)
     return records
+
+
+def index_record(rec):
+    """Pre-normalized fields for fast, accent-insensitive search."""
+    rec["_a"], rec["_t"] = norm(rec["artist"]), norm(rec["title"])
+    rec["_h"] = norm(" ".join(rec[k] for k in ("artist", "title", "label", "catno", "year", "format")))
+    rec["_w"] = rec["_h"].split()
+    return rec
 
 
 def find_collection_file():
@@ -187,6 +195,9 @@ class Core:
             save_json(CONFIG_PATH, self.config)
         self.history = load_json(HISTORY_PATH, [])
         self.records, self.collection_file = {}, None
+        self.collection_version = 0  # bumps whenever the record list changes, so the window can refresh
+        self.sync_status = {"state": "off"}
+        self._sync_wake = threading.Event()
         self.library = Library(DATA / "releases.json", lambda: self.config.get("discogs_token", "").strip())
         self.discord = PresenceWorker()
         self.discord.set_client_id(self.config["discord_client_id"])
@@ -197,6 +208,7 @@ class Core:
         self.player = Player(self)
         threading.Thread(target=self._watch_assets, daemon=True, name="assets").start()
         self.load_collection()
+        threading.Thread(target=self._sync_loop, daemon=True, name="discogs-sync").start()
         self.bot = BotRunner(DATA / "bot.json")
         self._apply_bot()
 
@@ -232,32 +244,91 @@ class Core:
         return bool(want) and (self.app_assets is None or want in self.app_assets)
 
     def load_collection(self):
+        """From the last Discogs sync when a username is set, otherwise from the newest CSV export."""
+        user = self.config["discogs_username"].strip()
+        synced = load_json(SYNCED_PATH, {}) if user else {}
+        if user and synced.get("username", "").lower() == user.lower():
+            self._set_records(synced["records"], f"Discogs · {synced['username']}")
+            print(f"[collection] {len(self.records)} records from the last Discogs sync of {user}")
+            return
         path = find_collection_file()
         if not path:
-            print("[collection] no CSV yet")
+            print("[collection] no CSV yet" + (", syncing from Discogs" if user else ""))
             return
         try:
-            self.records = parse_collection(path.read_text("utf-8-sig", errors="replace"))
-            self.collection_file = path.name
-            print(f"[collection] {len(self.records)} records from {path.name}")
+            records = parse_collection(path.read_text("utf-8-sig", errors="replace"))
         except ValueError as e:
             print(f"[collection] {path.name}: {e}")
             return
+        self._set_records(list(records.values()), path.name)
+        print(f"[collection] {len(self.records)} records from {path.name}")
+
+    def _set_records(self, records, source):
+        self.library.add_images(records)
+        self.records = {str(r["id"]): index_record(dict(r)) for r in records}
+        self.collection_file = source
+        self.collection_version += 1
         recent = {h["id"] for h in self.history}
-        order = sorted(self.records.values(), key=lambda r: (r["id"] not in recent, r["_a"]))
-        self.library.prefetch(order)
+        self.library.prefetch(sorted(self.records.values(), key=lambda r: (r["id"] not in recent, r["_a"])))
+
+    # -- syncing by Discogs username
+
+    def sync_now(self):
+        self._sync_wake.set()
+
+    def _sync_loop(self):
+        time.sleep(2)  # let the window open first
+        force = True
+        while True:
+            self._sync_wake.clear()  # a "sync now" from before this round is covered by this round
+            user = self.config["discogs_username"].strip()
+            synced = load_json(SYNCED_PATH, {}) if user else {}
+            fresh = (synced.get("username", "").lower() == user.lower()
+                     and time.time() - synced.get("at", 0) < SYNC_EVERY_HOURS * 3600)
+            if user and (force or not fresh):
+                self._sync(user)
+            elif not user:
+                self.sync_status = {"state": "off"}
+            force = self._sync_wake.wait(SYNC_EVERY_HOURS * 3600)
+
+    def _sync(self, user):
+        self.sync_status = {"state": "syncing", "done": 0, "total": 0}
+
+        def progress(done, total):
+            self.sync_status = {"state": "syncing", "done": done, "total": total}
+        try:
+            records = fetch_collection(user, self.config["discogs_token"].strip() or None, progress)
+        except CollectionError as e:
+            self.sync_status = {"state": "error", "message": str(e)}
+            print(f"[collection] sync failed: {e}")
+            return
+        except Exception as e:  # never let a sync problem take the app down
+            self.sync_status = {"state": "error", "message": f"Sync failed: {e}"}
+            print(f"[collection] sync failed: {e}")
+            return
+        if self.config["discogs_username"].strip().lower() != user.lower():
+            return  # the username changed while we were syncing
+        added = len({str(r["id"]) for r in records} - set(self.records))
+        save_json(SYNCED_PATH, {"username": user, "at": time.time(), "records": records})
+        self._set_records(records, f"Discogs · {user}")
+        self.sync_status = {"state": "ok", "at": time.time(), "count": len(records), "added": added}
+        print(f"[collection] synced {len(records)} records from Discogs ({user})")
 
     def import_csv(self, text):
         records = parse_collection(text)
         if not records:
             raise ValueError("No records found in that file.")
         IMPORTED_CSV.write_text(text.lstrip("﻿"), "utf-8")
+        if self.config["discogs_username"].strip():
+            self.update_config({"discogs_username": ""})  # an imported CSV replaces syncing by username
         self.load_collection()
         return len(self.records)
 
     def update_config(self, changes):
         token_changed = changes.get("discogs_token", self.config["discogs_token"]) != self.config["discogs_token"]
         bot_changed = any(changes.get(k, self.config[k]) != self.config[k] for k in ("bot_enabled", "bot_token"))
+        user_changed = (changes.get("discogs_username", self.config["discogs_username"]).strip()
+                        != self.config["discogs_username"].strip())
         for key, value in changes.items():
             if key in DEFAULT_CONFIG:
                 self.config[key] = type(DEFAULT_CONFIG[key])(value)
@@ -268,6 +339,9 @@ class Core:
             self.library.prefetch(list(self.records.values()))
         if bot_changed:
             threading.Thread(target=self._apply_bot, daemon=True, name="bot-restart").start()
+        if user_changed:
+            self.load_collection()  # the last sync of that user, or back to the CSV
+            self.sync_now()
         self.player.push()
 
     def add_history(self, rid):

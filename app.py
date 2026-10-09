@@ -96,6 +96,7 @@ class VinylApp:
         self.tray = None
         self.items = []
         self.meta_version = -1
+        self.collection_version = core.collection_version
         self.ticks = 0
 
         self._style()
@@ -308,10 +309,14 @@ class VinylApp:
 
         self.empty = tk.Frame(tf, bg=PANEL)
         tk.Label(self.empty, text="No records yet", bg=PANEL, fg=TEXT, font=(FONT, 14, "bold")).pack(pady=(0, px(6)))
-        tk.Label(self.empty, text="On Discogs: Collection → Export → download the CSV.\n"
-                                  "Then import it here (or drop the .csv in the app folder).",
+        tk.Label(self.empty, text="Type your Discogs username and your collection loads by itself,\n"
+                                  "or import the CSV export (Discogs: Collection → Export).",
                  bg=PANEL, fg=MUTED, font=(FONT, 10), justify="center").pack()
-        self.btn(self.empty, "Import Discogs CSV…", self.import_csv, kind="accent").pack(pady=px(14))
+        empty_btns = tk.Frame(self.empty, bg=PANEL)
+        empty_btns.pack(pady=px(14))
+        self.btn(empty_btns, "Use my Discogs username…", lambda: self.open_settings(start_tab=1),
+                 kind="accent").pack(side="left", padx=px(4))
+        self.btn(empty_btns, "Import CSV…", self.import_csv).pack(side="left", padx=px(4))
 
         ft = tk.Frame(lp, bg=PANEL)
         ft.pack(fill="x", pady=(px(8), 0))
@@ -540,6 +545,9 @@ class VinylApp:
             if SHOW_REQUEST.exists():  # someone started the app again while it's in the tray
                 SHOW_REQUEST.unlink(missing_ok=True)
                 self.show_window()
+            if self.core.collection_version != self.collection_version:
+                self.collection_version = self.core.collection_version
+                self.refresh_list()  # a Discogs sync brought in the collection (or new records)
             if self.view == "covers" and self.core.library.version != self.meta_version:
                 self.meta_version = self.core.library.version
                 self.grid_view.refresh_missing()  # covers whose lookup just finished
@@ -760,7 +768,7 @@ class VinylApp:
         self.count_lbl.config(text=f"Imported {count} records. Covers and track lengths load in the background.")
         return True
 
-    def open_settings(self):
+    def open_settings(self, start_tab=None):
         if self.settings and self.settings.winfo_exists():
             self.settings.lift()
             return
@@ -893,22 +901,69 @@ class VinylApp:
 
         # ---- Records
         f = tab("Records")
-        label(f, "Collection")
+        v_user = tk.StringVar(value=cfg["discogs_username"])
+        label(f, "Discogs username", "Your collection syncs by itself when the app starts and every few hours.")
+        user_row = tk.Frame(f, bg=BG)
+        user_row.grid(row=f.row, column=1, sticky="ew")
+        self.make_entry(user_row, v_user, width=22).pack(side="left", ipady=px(3))
+
+        def sync_now():
+            user = v_user.get().strip()
+            if not user:
+                messagebox.showerror("Discogs", "Type your Discogs username first.", parent=w)
+                return
+            if user != cfg["discogs_username"].strip():
+                self.core.update_config({"discogs_username": user})  # saving it starts the sync
+                baseline[str(v_user)] = v_user.get()
+            else:
+                self.core.sync_now()
+        self.btn(user_row, "Sync now", sync_now).pack(side="left", padx=(px(8), 0))
+        f.row += 2
+        sync_lbl = tk.Label(f, bg=BG, fg=MUTED, font=(FONT, 9), anchor="w", justify="left", wraplength=px(420))
+        sync_lbl.grid(row=f.row, column=1, sticky="w", pady=(px(2), px(8)))
+        f.row += 1
+
+        label(f, "Or a CSV export", "Only used when no username is set. Importing one switches syncing off.")
         col = tk.Frame(f, bg=BG)
         col.grid(row=f.row, column=1, sticky="ew")
-        col_lbl = tk.Label(col, bg=BG, fg=MUTED, font=(FONT, 10), anchor="w",
-                           text=f"{len(self.core.records)} records · {self.core.collection_file}"
-                           if self.core.records else "No collection imported yet")
+        col_lbl = tk.Label(col, bg=BG, fg=MUTED, font=(FONT, 10), anchor="w")
         col_lbl.pack(side="left")
 
         def do_import():
             if self.import_csv(parent=w):
-                col_lbl.config(text=f"{len(self.core.records)} records · {self.core.collection_file}")
-        self.btn(col, "Import Discogs CSV…", do_import).pack(side="right")
-        f.row += 1
+                v_user.set("")
+                baseline[str(v_user)] = ""
+        self.btn(col, "Import CSV…", do_import).pack(side="right")
+        f.row += 2
+
+        def refresh_sync_status():
+            if not w.winfo_exists():
+                return
+            st = self.core.sync_status
+            if st["state"] == "syncing":
+                text, color = (f"Syncing… {st['done']} of {st['total']} records" if st.get("total")
+                               else "Syncing…"), WARN
+            elif st["state"] == "error":
+                text, color = st["message"], BAD
+            elif st["state"] == "ok":
+                mins = int((time.time() - st["at"]) // 60)
+                when = "just now" if mins < 1 else f"{mins} min ago" if mins < 60 else f"{mins // 60} h ago"
+                new = f", {st['added']} new" if st.get("added") and st["added"] != st["count"] else ""
+                text, color = f"● {st['count']} records synced {when}{new}", GOOD
+            elif cfg["discogs_username"].strip() and self.core.records:
+                text, color = f"{len(self.core.records)} records from the last sync", MUTED
+            else:
+                text, color = "", MUTED
+            sync_lbl.config(text=text, fg=color)
+            source = self.core.collection_file or ""
+            col_lbl.config(text=f"{len(self.core.records)} records · {source}"
+                           if self.core.records and not source.startswith("Discogs") else
+                           ("Not used: syncing by username" if source.startswith("Discogs") else "None imported"))
+            w.after(700, refresh_sync_status)
+        refresh_sync_status()
 
         v_token = tk.StringVar(value=cfg["discogs_token"])
-        label(f, "Discogs token (optional)", "Makes looking up covers & tracklists faster.")
+        label(f, "Discogs token (optional)", "Needed only for a private collection. Also makes lookups faster.")
         tok = tk.Frame(f, bg=BG)
         tok.grid(row=f.row, column=1, sticky="ew")
         self.make_entry(tok, v_token, show="•", width=28).pack(side="left", ipady=px(3))
@@ -1076,7 +1131,7 @@ class VinylApp:
         refresh_bot_status()
 
         # What the settings were when the window opened (or last saved), to spot unsaved changes
-        watched = [v_client, v_card, v_card_text, v_status, v_button, v_asset, v_token, v_auto, v_flip,
+        watched = [v_client, v_card, v_card_text, v_status, v_button, v_asset, v_user, v_token, v_auto, v_flip,
                    v_share, v_hook, v_tray, v_startup, v_bot, v_bot_token]
         baseline = {str(v): v.get() for v in watched}
 
@@ -1119,6 +1174,7 @@ class VinylApp:
                 "card_title": card_key, "card_title_text": v_card_text.get().strip() or "Vinyl",
                 "show_discogs_button": v_button.get(), "vinyl_asset": v_asset.get().strip(),
                 "discogs_token": v_token.get().strip(), "auto_continue": v_auto.get(), "flip_seconds": flip_s,
+                "discogs_username": v_user.get().strip(),
                 "share_enabled": v_share.get(), "share_webhook": hook_url, "close_to_tray": v_tray.get(),
                 "bot_enabled": v_bot.get(), "bot_token": v_bot_token.get().strip(),
             })
@@ -1135,6 +1191,8 @@ class VinylApp:
         self.btn(bar, "Save", save, kind="accent").pack(side="right")
         self.btn(bar, "Cancel", w.destroy, kind="ghost").pack(side="right", padx=px(8))
 
+        if start_tab is not None:
+            tabs.select(start_tab)
         w.update_idletasks()
         x = self.root.winfo_rootx() + (self.root.winfo_width() - w.winfo_width()) // 2
         y = self.root.winfo_rooty() + max(0, (self.root.winfo_height() - w.winfo_height()) // 3)

@@ -119,6 +119,70 @@ def fetch_discogs(release_id, token=None):
     }
 
 
+class CollectionError(Exception):
+    """A message that can be shown to the user as is."""
+
+
+def fetch_collection(username, token=None, progress=None):
+    """Everything in a Discogs user's collection, as basic records (newest first).
+
+    Public collections need only the username; a private one needs that user's own token.
+    progress(done, total) is called after each page of 100.
+    """
+    headers = {"Authorization": f"Discogs token={token}"} if token else {}
+    user = urllib.parse.quote(username.strip())
+    records, page, pages, retries = {}, 1, 1, 0
+    while page <= pages:
+        url = (f"{DISCOGS}/users/{user}/collection/folders/0/releases"
+               f"?per_page=100&page={page}&sort=added&sort_order=desc")
+        try:
+            data = _get_json(url, headers, timeout=20)
+        except RateLimited:
+            if retries >= 3:
+                raise CollectionError("Discogs is busy right now. Try again in a minute.")
+            retries += 1
+            time.sleep(60)
+            continue
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                raise CollectionError(f"Discogs has no user called \"{username}\".") from e
+            if e.code in (401, 403):
+                raise CollectionError("This collection is private. Add your own Discogs token "
+                                      "(Settings → Records) to sync it.") from e
+            raise CollectionError(f"Discogs answered with an error ({e.code}).") from e
+        except urllib.error.URLError as e:
+            raise CollectionError("Couldn't reach Discogs. Are you online?") from e
+        pages = (data.get("pagination") or {}).get("pages") or 1
+        total = (data.get("pagination") or {}).get("items") or 0
+        for item in data.get("releases") or []:
+            b = item.get("basic_information") or {}
+            rid = b.get("id") or item.get("id")
+            if not rid or rid in records:
+                continue  # the same release twice in a collection is one record here
+            labels = b.get("labels") or [{}]
+            formats = " + ".join(", ".join([f.get("name") or ""] + (f.get("descriptions") or []))
+                                 for f in b.get("formats") or [])
+            records[rid] = {
+                "id": int(rid),
+                "artist": _artist_names(b.get("artists")),
+                "title": (b.get("title") or "").strip(),
+                "label": clean_name(labels[0].get("name")),
+                "catno": (labels[0].get("catno") or "").strip(),
+                "format": formats,
+                "year": str(b["year"]) if b.get("year") else "",
+                # same shape as the CSV's "Date Added", so sorting works the same
+                "added": (item.get("date_added") or "")[:19].replace("T", " "),
+                "cover": b.get("cover_image") or None,
+                "thumb": b.get("thumb") or None,
+            }
+        if progress:
+            progress(len(records), total)
+        page += 1
+        if page <= pages:
+            time.sleep(1.1 if token else 2.5)  # Discogs allows 60 requests/min with a token, 25 without
+    return list(records.values())
+
+
 def fetch_deezer(artist, title):
     """Find the album on Deezer; returns {'cover', 'thumb', 'tracks': [(title, seconds)]} or None."""
     artist_q = "" if norm(artist) in ("various", "various artists") else artist
@@ -187,6 +251,7 @@ class Library:
         self.last_error = None
         self._fetch_locks = {}
         self._queue = deque()
+        self.images = {}  # release id -> (cover, thumb) known from the collection sync, before a full lookup
         self._wake = threading.Event()
         self.cache = {}
         try:
@@ -200,10 +265,21 @@ class Library:
 
     def get_cached(self, rid):
         with self.lock:
-            return self.cache.get(str(rid))
+            info = self.cache.get(str(rid))
+        if info is None and str(rid) in self.images:
+            # Not looked up yet, but the collection sync already told us the cover.
+            cover, thumb = self.images[str(rid)]
+            return {"cover": cover, "thumb": thumb, "tracks": [], "artist_id": None}
+        return info
+
+    def add_images(self, records):
+        """Covers from the collection sync: shown right away, until the full lookup is done."""
+        self.images.update({str(r["id"]): (r.get("cover"), r.get("thumb")) for r in records if r.get("cover")})
+        self.version += 1
 
     def _needs_fetch(self, rid):
-        info = self.get_cached(rid)
+        with self.lock:
+            info = self.cache.get(str(rid))
         if info is None:
             return True
         # A token added later can unlock covers that were missing before.
