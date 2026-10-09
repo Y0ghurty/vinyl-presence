@@ -768,7 +768,8 @@ class VinylApp:
         w.title("Vinyl Presence settings")
         w.transient(self.root)
         w.resizable(False, False)
-        w.bind("<Escape>", lambda e: w.destroy())
+        w.bind("<Escape>", lambda e: close_settings())
+        w.protocol("WM_DELETE_WINDOW", lambda: close_settings())
         dark_titlebar(w)
         pad = tk.Frame(w, bg=BG)
         pad.pack(fill="both", expand=True, padx=px(22), pady=px(18))
@@ -953,14 +954,23 @@ class VinylApp:
                                      "https://discord.com/api/webhooks/", parent=w)
                 return
 
+            def test_ok():
+                # It works, so switch posting on and keep the URL right away; no separate Save needed.
+                v_share.set(True)
+                self.core.update_config({"share_enabled": True, "share_webhook": url})
+                baseline[str(v_share)], baseline[str(v_hook)] = True, url
+                if w.winfo_exists():
+                    messagebox.showinfo("Now spinning", "Test message sent, and posting is now switched on.\n\n"
+                                        "Records you play will show up in that channel.", parent=w)
+
             def work():
                 try:
                     share.post_test(url, self.core.discord.status)
-                    self.ui.put(lambda: messagebox.showinfo("Now spinning", "Test message sent. Check the channel!",
-                                                            parent=w))
+                    self.ui.put(test_ok)
                 except Exception as e:
                     msg = str(e)
-                    self.ui.put(lambda: messagebox.showerror("Now spinning", f"That didn't work:\n{msg}", parent=w))
+                    self.ui.put(lambda: w.winfo_exists() and messagebox.showerror(
+                        "Now spinning", f"That didn't work:\n{msg}", parent=w))
             threading.Thread(target=work, daemon=True).start()
         self.btn(hook, "Send test", send_test).pack(side="left", padx=(px(8), 0))
         f.row += 2
@@ -984,6 +994,21 @@ class VinylApp:
             f.row += 1
         if sys.platform != "win32":
             startup_cb.config(state="disabled")
+
+        # What the settings were when the window opened (or last saved), to spot unsaved changes
+        watched = [v_client, v_card, v_card_text, v_status, v_button, v_asset, v_token, v_auto, v_flip,
+                   v_share, v_hook, v_tray, v_startup]
+        baseline = {str(v): v.get() for v in watched}
+
+        def close_settings():
+            """✕ or Esc: don't silently throw away changes."""
+            if any(v.get() != baseline[str(v)] for v in watched):
+                answer = messagebox.askyesnocancel("Settings", "Save your changes?", parent=w)
+                if answer is None:
+                    return
+                if answer:
+                    return save()
+            w.destroy()
 
         def save():
             client = v_client.get().strip()
