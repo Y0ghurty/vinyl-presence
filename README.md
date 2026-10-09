@@ -1,5 +1,8 @@
 # Vinyl Presence
 
+[![Download](https://img.shields.io/github/v/release/Y0ghurty/vinyl-presence?label=Download&color=ef7a3c)](https://github.com/Y0ghurty/vinyl-presence/releases/latest)
+[![Discord](https://img.shields.io/badge/Discord-Vinyl%20Hangout-5865F2?logo=discord&logoColor=white)](https://discord.gg/xHj9Td7MYz)
+
 Spotify-style Discord status for the records on your real turntable.
 
 Pick the record you just put on in a small desktop window. Your Discord profile then shows the album
@@ -114,6 +117,13 @@ git push origin v1.1.0
 
 GitHub Actions then builds `VinylPresence.exe` and publishes it as a release with automatic release
 notes (see `.github/workflows/release.yml`). Everyone running an older version sees *Update available*.
+
+## Need help?
+
+Join **[Vinyl Hangout](https://discord.gg/xHj9Td7MYz)** on Discord for questions, setup help or ideas, or
+just to share what's on your turntable. You can also click **Help** in the app to get there.
+
+Found a bug? [Open an issue](https://github.com/Y0ghurty/vinyl-presence/issues).
 
 ## Troubleshooting
 

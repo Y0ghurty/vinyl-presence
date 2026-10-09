@@ -37,6 +37,7 @@ TEXT, MUTED, FAINT = "#f2ebe5", "#a0978f", "#6d6660"
 ACCENT, ACCENT_HI, ACCENT_DIM = "#ef7a3c", "#ff9259", "#5c3524"
 GOOD, WARN, BAD = "#46c98b", "#f2b14c", "#ec5f5f"
 
+SUPPORT_DISCORD = "https://discord.gg/xHj9Td7MYz"  # Vinyl Hangout: questions & help
 SORTS = ["Artist A–Z", "Title A–Z", "Recently added", "Recently played", "Most played"]
 CARD_TITLES = {
     "app": "Listening to <app name>",
@@ -169,6 +170,7 @@ class VinylApp:
         tk.Label(top, image=self.icon_small, bg=BG).pack(side="left")
         tk.Label(top, text="Vinyl Presence", bg=BG, fg=TEXT, font=(FONT, 14, "bold")).pack(side="left", padx=px(10))
         self.btn(top, "⚙  Settings", self.open_settings).pack(side="right")
+        self.btn(top, "Help", lambda: webbrowser.open(SUPPORT_DISCORD), kind="ghost").pack(side="right", padx=(0, px(6)))
         pill = tk.Frame(top, bg=BG, cursor="hand2")
         pill.pack(side="right", padx=px(16))
         self.dc_dot = tk.Label(pill, text="●", bg=BG, fg=WARN, font=(FONT, 10), cursor="hand2")
@@ -718,6 +720,7 @@ class VinylApp:
         links = tk.Frame(g, bg=PANEL)
         links.pack(fill="x", pady=(px(8), 0))
         self.link(links, "Open Discord Developer Portal ↗", "https://discord.com/developers/applications").pack(side="left")
+        self.link(links, "Stuck? Ask in our Discord ↗", SUPPORT_DISCORD).pack(side="right")
         badge = tk.Label(links, text="Show vinyl.png", bg=PANEL, fg=ACCENT, cursor="hand2",
                          font=(FONT, 9, "underline"))
         badge.bind("<Button-1>", lambda e: self.reveal_badge())
