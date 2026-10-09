@@ -1,11 +1,24 @@
-# Your own settings, history and collection stay on your PC
-config.json
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.eggs/
+
+# Testing / tooling
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# App data this repo doesn't ship (visible only at runtime under the user's
+# HOME/APPDATA or VINYL_PRESENCE_HOME, but keep them out if a dev runs from source)
 data/
+config.json
 *.csv
 /vinyl.png
 
-# Python / build output
-__pycache__/
-build/
-dist/
-*.spec
+# OS junk
+.DS_Store
+Thumbs.db

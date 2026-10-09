@@ -58,12 +58,14 @@ def parse_duration(s):
 
 def side_of(position):
     pos = (position or "").strip()
+    # Multi-disc releases use "CD1-1" (or "1-1"/"1.2" for a numbered top level).
+    # Check this BEFORE the single-letter rule, or "CD1-1" matches "CD" as a side.
+    m = re.match(r"^(?:cd)?(\d+)[-.]\d+", pos, re.I)
+    if m:
+        return f"Disc {m.group(1)}"
     m = re.match(r"^([A-Za-z]+)", pos)
     if m:
         return m.group(1).upper()
-    m = re.match(r"^(?:CD)?(\d+)[-.]\d+", pos, re.I)
-    if m:
-        return f"Disc {m.group(1)}"
     return "All"
 
 
