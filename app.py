@@ -20,9 +20,14 @@ import webbrowser
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from core import ASSETS, DATA, ROOT, Core, search
-from metadata import USER_AGENT
+import share
+import tray
 import updater
+from core import ASSETS, DATA, ROOT, Core, search
+from covers import CoverGrid
+from metadata import USER_AGENT
+from stats_view import StatsWindow
+from theme import ACCENT, ACCENT_DIM, ACCENT_HI, BAD, BG, FAINT, FONT, GOOD, LINE, MUTED, PANEL, PANEL2, ROW_ALT, TEXT, WARN
 from version import VERSION
 
 try:
@@ -30,13 +35,8 @@ try:
 except ImportError:  # covers in the window need Pillow; everything else works without it
     Image = None
 
-FONT = "Segoe UI"
-BG, PANEL, PANEL2, ROW_ALT, LINE = "#121014", "#1b181e", "#27232b", "#1f1c22", "#363039"
-TEXT, MUTED, FAINT = "#f2ebe5", "#a0978f", "#6d6660"
-ACCENT, ACCENT_HI, ACCENT_DIM = "#ef7a3c", "#ff9259", "#5c3524"
-GOOD, WARN, BAD = "#46c98b", "#f2b14c", "#ec5f5f"
-
 SUPPORT_DISCORD = "https://discord.gg/xHj9Td7MYz"  # Vinyl Hangout: questions & help
+SHOW_REQUEST = DATA / "show.request"  # a second start drops this file to bring the window back
 SORTS = ["Artist A–Z", "Title A–Z", "Recently added", "Recently played", "Most played"]
 CARD_TITLES = {
     "app": "Listening to <app name>",
@@ -91,6 +91,10 @@ class VinylApp:
         self.cover_url = None
         self.search_job = None
         self.settings = None
+        self.stats_win = None
+        self.tray = None
+        self.items = []
+        self.meta_version = -1
         self.ticks = 0
 
         self._style()
@@ -101,6 +105,7 @@ class VinylApp:
         self.update = None
         self.updating = False
         self.closed = False
+        self._start_tray()
         threading.Thread(target=self._check_update, daemon=True, name="update-check").start()
         threading.Thread(target=core.player.restore_state, daemon=True, name="resume").start()
         if not core.config["discord_client_id"]:
@@ -135,6 +140,12 @@ class VinylApp:
         self.root.option_add("*TCombobox*Listbox.selectBackground", ACCENT_DIM)
         self.root.option_add("*TCombobox*Listbox.selectForeground", TEXT)
         self.root.option_add("*TCombobox*Listbox.font", (FONT, 10))
+        st.configure("Dark.TNotebook", background=BG, bordercolor=LINE, lightcolor=BG, darkcolor=BG,
+                     tabmargins=(0, 0, 0, 0))
+        st.configure("Dark.TNotebook.Tab", background=BG, foreground=MUTED, font=(FONT, 10),
+                     padding=(self.px(12), self.px(6)), bordercolor=LINE, lightcolor=BG, darkcolor=BG, focuscolor=BG)
+        st.map("Dark.TNotebook.Tab", background=[("selected", PANEL2), ("active", PANEL)],
+               foreground=[("selected", TEXT), ("active", TEXT)], lightcolor=[("selected", PANEL2)])
 
     def btn(self, parent, text, command, kind="normal", size=10):
         bg, fg, hover = {"normal": (PANEL2, TEXT, LINE), "accent": (ACCENT, "#1d120b", ACCENT_HI),
@@ -170,6 +181,7 @@ class VinylApp:
         tk.Label(top, text="Vinyl Presence", bg=BG, fg=TEXT, font=(FONT, 14, "bold")).pack(side="left", padx=px(10))
         self.btn(top, "⚙  Settings", self.open_settings).pack(side="right")
         self.btn(top, "Help", lambda: webbrowser.open(SUPPORT_DISCORD), kind="ghost").pack(side="right", padx=(0, px(6)))
+        self.btn(top, "Stats", self.open_stats, kind="ghost").pack(side="right", padx=(0, px(6)))
         pill = tk.Frame(top, bg=BG, cursor="hand2")
         pill.pack(side="right", padx=px(16))
         self.dc_dot = tk.Label(pill, text="●", bg=BG, fg=WARN, font=(FONT, 10), cursor="hand2")
@@ -220,12 +232,17 @@ class VinylApp:
         ctl.columnconfigure(1, weight=1)
         self.sides_frame = tk.Frame(ctl, bg=PANEL)
         self.sides_frame.grid(row=0, column=0, sticky="w")
+        # nudge the timer when play was clicked a bit before/after the needle dropped
+        self.back_btn = self.btn(ctl, "−10s", lambda: self.core.player.nudge(-10), kind="ghost", size=9)
+        self.back_btn.grid(row=0, column=2, padx=(0, px(2)))
+        self.fwd_btn = self.btn(ctl, "+10s", lambda: self.core.player.nudge(10), kind="ghost", size=9)
+        self.fwd_btn.grid(row=0, column=3, padx=(0, px(14)))
         self.prev_btn = self.btn(ctl, "⏮", lambda: self.bg(self.core.player.control, "prev"), size=11)
-        self.prev_btn.grid(row=0, column=2, padx=(0, px(6)))
+        self.prev_btn.grid(row=0, column=4, padx=(0, px(6)))
         self.next_btn = self.btn(ctl, "⏭", lambda: self.bg(self.core.player.control, "next"), size=11)
-        self.next_btn.grid(row=0, column=3, padx=(0, px(6)))
+        self.next_btn.grid(row=0, column=5, padx=(0, px(6)))
         self.stop_btn = self.btn(ctl, "■  Stop", lambda: self.bg(self.core.player.control, "stop"))
-        self.stop_btn.grid(row=0, column=4)
+        self.stop_btn.grid(row=0, column=6)
 
         # body: records on the left, tracklist on the right
         body = tk.Frame(root, bg=BG)
@@ -262,20 +279,31 @@ class VinylApp:
         self.sort.set(self.core.config.get("list_sort") if self.core.config.get("list_sort") in SORTS else SORTS[0])
         self.sort.pack(side="right")
         tk.Label(mr, text="Sort", bg=PANEL, fg=FAINT, font=(FONT, 9)).pack(side="right", padx=px(6))
+        views = tk.Frame(mr, bg=PANEL)
+        views.pack(side="right", padx=(0, px(16)))
+        self.view_btns = {}
+        for key, label in (("list", "☰  List"), ("covers", "⊞  Covers")):
+            b = self.btn(views, label, lambda key=key: self.set_view(key), size=9)
+            b.pack(side="left", padx=(0, px(2)))
+            self.view_btns[key] = b
 
         tf = tk.Frame(lp, bg=PANEL)
         tf.pack(fill="both", expand=True)
+        self.list_frame = tk.Frame(tf, bg=PANEL)
+        self.grid_view = CoverGrid(tf, self, on_play=self.play)
         cols = (("artist", "ARTIST", 200), ("title", "TITLE", 260), ("year", "YEAR", 56), ("format", "FORMAT", 150))
-        self.tree = ttk.Treeview(tf, columns=[c[0] for c in cols], show="headings", selectmode="browse")
+        self.tree = ttk.Treeview(self.list_frame, columns=[c[0] for c in cols], show="headings", selectmode="browse")
         for key, label, width in cols:
             self.tree.heading(key, text=label, anchor="w")
             self.tree.column(key, width=px(width), minwidth=px(40), stretch=key in ("artist", "title", "format"))
         self.tree.tag_configure("odd", background=ROW_ALT)
         self.tree.tag_configure("playing", foreground=ACCENT_HI)
-        sb = ttk.Scrollbar(tf, orient="vertical", command=self.tree.yview)
+        sb = ttk.Scrollbar(self.list_frame, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=sb.set)
         self.tree.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
+        self.view = self.core.config.get("list_view") if self.core.config.get("list_view") in self.view_btns else "list"
+        self._show_view()
 
         self.empty = tk.Frame(tf, bg=PANEL)
         tk.Label(self.empty, text="No records yet", bg=PANEL, fg=TEXT, font=(FONT, 14, "bold")).pack(pady=(0, px(6)))
@@ -367,22 +395,48 @@ class VinylApp:
             else:
                 items = sorted(recs, key=lambda r: (r["_a"], r["year"], r["_t"]))
             self.count_lbl.config(text=f"{len(recs)} records" if recs else "")
-        self.tree.delete(*self.tree.get_children())
-        playing = self.playing_iid
-        for i, r in enumerate(items):
-            iid = str(r["id"])
-            tags = (("odd",) if i % 2 else ()) + (("playing",) if iid == playing else ())
-            self.tree.insert("", "end", iid=iid, tags=tags,
-                             values=(r["artist"], r["title"], r["year"], short_format(r["format"])))
-        if query and items:
-            self.tree.selection_set(str(items[0]["id"]))
-            self.tree.see(str(items[0]["id"]))
+        self.items = items
+        if self.view == "covers":
+            self.grid_view.set_items(items, select_first=bool(query))
+        else:
+            self.tree.delete(*self.tree.get_children())
+            playing = self.playing_iid
+            for i, r in enumerate(items):
+                iid = str(r["id"])
+                tags = (("odd",) if i % 2 else ()) + (("playing",) if iid == playing else ())
+                self.tree.insert("", "end", iid=iid, tags=tags,
+                                 values=(r["artist"], r["title"], r["year"], short_format(r["format"])))
+            if query and items:
+                self.tree.selection_set(str(items[0]["id"]))
+                self.tree.see(str(items[0]["id"]))
         if recs:
             self.empty.place_forget()
         else:
             self.empty.place(relx=0.5, rely=0.45, anchor="center")
 
+    def set_view(self, view):
+        if view != self.view:
+            self.view = view
+            self.core.update_config({"list_view": view})
+            self._show_view()
+            self.refresh_list()
+        self.entry.focus_set()
+
+    def _show_view(self):
+        if self.view == "covers":
+            self.list_frame.pack_forget()
+            self.grid_view.pack(fill="both", expand=True)
+        else:
+            self.grid_view.pack_forget()
+            self.list_frame.pack(fill="both", expand=True)
+        for key, b in self.view_btns.items():
+            b.base_bg = ACCENT_DIM if key == self.view else PANEL2
+            b.config(bg=b.base_bg, fg=TEXT if key == self.view else MUTED)
+
     def move_selection(self, delta):
+        if self.view == "covers":
+            self.grid_view.move(delta if abs(delta) == 1 else (3 if delta > 0 else -3))
+            return "break"
         items = self.tree.get_children()
         if items:
             sel = self.tree.selection()
@@ -408,18 +462,25 @@ class VinylApp:
             return "break"
 
     def surprise(self):
-        items = self.tree.get_children()
-        if items:
-            pick = random.choice(items)
-            self.tree.selection_set(pick)
-            self.tree.see(pick)
-            self.entry.focus_set()
-            self.count_lbl.config(text="How about this one? Press Enter to play it.")
+        if not self.items:
+            return
+        pick = random.choice(self.items)["id"]
+        if self.view == "covers":
+            self.grid_view.select_id(pick)
+        else:
+            self.tree.selection_set(str(pick))
+            self.tree.see(str(pick))
+        self.entry.focus_set()
+        self.count_lbl.config(text="How about this one? Press Enter to play it.")
 
     def play_selected(self):
-        sel = self.tree.selection()
-        if sel:
-            self.play(int(sel[0]))
+        if self.view == "covers":
+            rid = self.grid_view.selected_id()
+        else:
+            sel = self.tree.selection()
+            rid = int(sel[0]) if sel else None
+        if rid is not None:
+            self.play(rid)
         return "break"
 
     # ------------------------------------------------------------ playing
@@ -475,6 +536,12 @@ class VinylApp:
         self.render_progress(snap)
         if self.ticks % 5 == 0:
             self.render_status()
+            if SHOW_REQUEST.exists():  # someone started the app again while it's in the tray
+                SHOW_REQUEST.unlink(missing_ok=True)
+                self.show_window()
+            if self.view == "covers" and self.core.library.version != self.meta_version:
+                self.meta_version = self.core.library.version
+                self.grid_view.refresh_missing()  # covers whose lookup just finished
         self.ticks += 1
         self.root.after(200, self._loop)
 
@@ -486,6 +553,9 @@ class VinylApp:
                 tags = [t for t in self.tree.item(old, "tags") if t != "playing"] + (["playing"] if add else [])
                 self.tree.item(old, tags=tags)
         self.playing_iid = iid
+        self.grid_view.set_playing(int(iid) if iid else None)
+        if self.tray:
+            self.tray.update(f"Vinyl Presence · {self._tray_now_text()}")
 
     def render_now(self, snap):
         for w in self.sides_frame.winfo_children():
@@ -546,7 +616,7 @@ class VinylApp:
                 b = self.btn(self.sides_frame, s, lambda s=s: self.play(rec["id"], s),
                              kind="accent" if s == side else "normal")
                 b.pack(side="left", padx=(0, self.px(4)))
-        self._controls(True, idx is not None)
+        self._controls(True, idx is not None, nudge=not snap["side_done"])
 
         # full tracklist, grouped per side
         self.tracks_msg.place_forget()
@@ -578,9 +648,11 @@ class VinylApp:
         if self.tracks.exists(cur):
             self.tracks.see(cur)
 
-    def _controls(self, show, track_mode=False):
+    def _controls(self, show, track_mode=False, nudge=False):
         for w in (self.prev_btn, self.next_btn):
             w.grid() if show and track_mode else w.grid_remove()
+        for w in (self.back_btn, self.fwd_btn):
+            w.grid() if show and nudge else w.grid_remove()
         self.stop_btn.grid() if show else self.stop_btn.grid_remove()
 
     def _tracks_message(self, text):
@@ -700,13 +772,44 @@ class VinylApp:
         dark_titlebar(w)
         pad = tk.Frame(w, bg=BG)
         pad.pack(fill="both", expand=True, padx=px(22), pady=px(18))
+        tabs = ttk.Notebook(pad, style="Dark.TNotebook")
+        tabs.pack(fill="both", expand=True)
 
-        guide = tk.Frame(pad, bg=PANEL)
-        guide.pack(fill="x")
+        def tab(title):
+            outer = tk.Frame(tabs, bg=BG)
+            tabs.add(outer, text=f"  {title}  ")
+            form = tk.Frame(outer, bg=BG)
+            form.pack(fill="both", expand=True, padx=px(4), pady=(px(14), 0))
+            form.columnconfigure(1, weight=1)
+            form.row = 0
+            return form
+
+        def label(form, text, hint=None, hint_color=FAINT):
+            tk.Label(form, text=text, bg=BG, fg=TEXT, font=(FONT, 10), anchor="w").grid(
+                row=form.row, column=0, sticky="w", pady=px(5), padx=(0, px(14)))
+            if hint:
+                tk.Label(form, text=hint, bg=BG, fg=hint_color, font=(FONT, 8), anchor="w", justify="left",
+                         wraplength=px(400)).grid(row=form.row + 1, column=1, sticky="w")
+
+        def check(form, text, var, column=1):
+            cb = tk.Checkbutton(form, text=text, variable=var, bg=BG, fg=TEXT, selectcolor=PANEL2,
+                                activebackground=BG, activeforeground=TEXT, disabledforeground=FAINT,
+                                font=(FONT, 10), anchor="w")
+            cb.grid(row=form.row, column=column, columnspan=2 if column == 0 else 1, sticky="w", pady=px(3))
+            return cb
+
+        # ---- Discord
+        f = tab("Discord")
+        guide = tk.Frame(f, bg=PANEL)
+        guide.grid(row=f.row, column=0, columnspan=2, sticky="ew", pady=(0, px(12)))
+        f.row += 1
         g = tk.Frame(guide, bg=PANEL)
-        g.pack(fill="x", padx=px(16), pady=px(14))
-        tk.Label(g, text="Connect to Discord (one time, about 2 minutes)", bg=PANEL, fg=TEXT,
-                 font=(FONT, 11, "bold"), anchor="w").pack(fill="x")
+        g.pack(fill="x", padx=px(16), pady=px(12))
+        head = tk.Frame(g, bg=PANEL)
+        head.pack(fill="x")
+        tk.Label(head, text="Connect to Discord (one time, about 2 minutes)", bg=PANEL, fg=TEXT,
+                 font=(FONT, 11, "bold"), anchor="w").pack(side="left")
+        steps_box = tk.Frame(g, bg=PANEL)
         steps = [
             "1.  Open the Discord Developer Portal and click New Application. Its name is the title of your "
             "status (\"Listening to My Record Player\"), so make it say record player or turntable.",
@@ -716,42 +819,44 @@ class VinylApp:
             "4.  In Discord: User Settings → Activity Privacy → turn on \"Share your detected activities\".",
         ]
         for s in steps:
-            tk.Label(g, text=s, bg=PANEL, fg=MUTED, font=(FONT, 9), anchor="w", justify="left",
+            tk.Label(steps_box, text=s, bg=PANEL, fg=MUTED, font=(FONT, 9), anchor="w", justify="left",
                      wraplength=px(520)).pack(fill="x", pady=(px(4), 0))
-        links = tk.Frame(g, bg=PANEL)
+        links = tk.Frame(steps_box, bg=PANEL)
         links.pack(fill="x", pady=(px(8), 0))
         self.link(links, "Open Discord Developer Portal ↗", "https://discord.com/developers/applications").pack(side="left")
-        self.link(links, "Stuck? Ask in our Discord ↗", SUPPORT_DISCORD).pack(side="right")
         badge = tk.Label(links, text="Show vinyl.png", bg=PANEL, fg=ACCENT, cursor="hand2",
                          font=(FONT, 9, "underline"))
         badge.bind("<Button-1>", lambda e: self.reveal_badge())
         badge.pack(side="left", padx=px(16))
+        self.link(links, "Stuck? Ask in our Discord ↗", SUPPORT_DISCORD).pack(side="right")
 
-        form = tk.Frame(pad, bg=BG)
-        form.pack(fill="x", pady=(px(16), 0))
-        form.columnconfigure(1, weight=1)
-        row = 0
-
-        def label(text, hint=None, hint_color=FAINT):
-            nonlocal row
-            tk.Label(form, text=text, bg=BG, fg=TEXT, font=(FONT, 10), anchor="w").grid(
-                row=row, column=0, sticky="w", pady=px(5), padx=(0, px(14)))
-            if hint:
-                tk.Label(form, text=hint, bg=BG, fg=hint_color, font=(FONT, 8), anchor="w").grid(
-                    row=row + 1, column=1, sticky="w")
+        def toggle_steps(_e=None):
+            if steps_box.winfo_ismapped():
+                steps_box.pack_forget()
+                toggle.config(text="Show steps ▾")
+            else:
+                steps_box.pack(fill="x")
+                toggle.config(text="Hide steps ▴")
+        toggle = tk.Label(head, bg=PANEL, fg=ACCENT, cursor="hand2", font=(FONT, 9))
+        toggle.bind("<Button-1>", toggle_steps)
+        toggle.pack(side="right")
+        if cfg["discord_client_id"]:  # already set up: keep the guide folded away
+            toggle.config(text="Show steps ▾")
+        else:
+            toggle_steps()
 
         v_client = tk.StringVar(value=cfg["discord_client_id"])
-        label("Discord Application ID")
-        self.make_entry(form, v_client).grid(row=row, column=1, sticky="ew", ipady=px(3))
-        row += 1
+        label(f, "Discord Application ID")
+        self.make_entry(f, v_client).grid(row=f.row, column=1, sticky="ew", ipady=px(3))
+        f.row += 1
 
         v_card = tk.StringVar(value=CARD_TITLES.get(cfg["card_title"], CARD_TITLES["app"]))
         v_card_text = tk.StringVar(value=cfg["card_title_text"])
         ignored = self.core.discord.status.get("name_ignored")
-        label("Card title", "Your Discord ignores this setting: rename the app in the Developer Portal instead."
+        label(f, "Card title", "Your Discord ignores this setting: rename the app in the Developer Portal instead."
               if ignored else "The top line of your status card.", WARN if ignored else FAINT)
-        card = tk.Frame(form, bg=BG)
-        card.grid(row=row, column=1, sticky="ew")
+        card = tk.Frame(f, bg=BG)
+        card.grid(row=f.row, column=1, sticky="ew")
         card_box = ttk.Combobox(card, textvariable=v_card, values=list(CARD_TITLES.values()), state="readonly",
                                 width=26, font=(FONT, 10))
         card_box.pack(side="left")
@@ -763,55 +868,32 @@ class VinylApp:
                              disabledbackground=BG, disabledforeground=FAINT)
         card_box.bind("<<ComboboxSelected>>", toggle_card_text)
         toggle_card_text()
-        row += 2
+        f.row += 2
 
         v_status = tk.StringVar(value=STATUS_CHOICES.get(cfg["status_display"], STATUS_CHOICES["artist"]))
-        label("Member list shows")
-        ttk.Combobox(form, textvariable=v_status, values=list(STATUS_CHOICES.values()), state="readonly",
-                     font=(FONT, 10)).grid(row=row, column=1, sticky="ew")
-        row += 1
+        label(f, "Member list shows")
+        ttk.Combobox(f, textvariable=v_status, values=list(STATUS_CHOICES.values()), state="readonly",
+                     font=(FONT, 10)).grid(row=f.row, column=1, sticky="ew")
+        f.row += 1
 
         v_button = tk.BooleanVar(value=cfg["show_discogs_button"])
-        tk.Checkbutton(form, text="Show a \"View on Discogs\" button on my status", variable=v_button,
-                       bg=BG, fg=TEXT, selectcolor=PANEL2, activebackground=BG, activeforeground=TEXT,
-                       font=(FONT, 10), anchor="w").grid(row=row, column=1, sticky="w", pady=px(4))
-        row += 1
+        check(f, "Show a \"View on Discogs\" button on my status", v_button)
+        f.row += 1
 
         v_asset = tk.StringVar(value=cfg["vinyl_asset"])
         assets = self.core.app_assets
         missing = assets is not None and cfg["vinyl_asset"].strip() not in assets
-        label("Vinyl badge asset name",
+        label(f, "Vinyl badge asset name",
               "Not uploaded to your Discord app yet: see step 3. The badge appears once it is." if missing
               else "The art asset name from step 3.", WARN if missing else FAINT)
-        self.make_entry(form, v_asset, width=16).grid(row=row, column=1, sticky="w", ipady=px(3))
-        row += 2
+        self.make_entry(f, v_asset, width=16).grid(row=f.row, column=1, sticky="w", ipady=px(3))
+        f.row += 2
 
-        tk.Frame(form, bg=LINE, height=1).grid(row=row, column=0, columnspan=2, sticky="ew", pady=px(12))
-        row += 1
-
-        v_token = tk.StringVar(value=cfg["discogs_token"])
-        label("Discogs token (optional)", "Makes looking up covers & tracklists faster.")
-        tok = tk.Frame(form, bg=BG)
-        tok.grid(row=row, column=1, sticky="ew")
-        self.make_entry(tok, v_token, show="•", width=28).pack(side="left", ipady=px(3))
-        self.link(tok, "Get one ↗", "https://www.discogs.com/settings/developers", bg=BG).pack(side="left", padx=px(10))
-        row += 2
-
-        v_auto = tk.BooleanVar(value=cfg["auto_continue"])
-        v_flip = tk.StringVar(value=str(cfg["flip_seconds"]))
-        flip = tk.Frame(form, bg=BG)
-        flip.grid(row=row, column=1, sticky="w", pady=px(6))
-        tk.Checkbutton(flip, text="When a side ends, continue with the next side after", variable=v_auto,
-                       bg=BG, fg=TEXT, selectcolor=PANEL2, activebackground=BG, activeforeground=TEXT,
-                       font=(FONT, 10)).pack(side="left")
-        tk.Spinbox(flip, from_=0, to=600, increment=5, textvariable=v_flip, width=4, bg=PANEL2, fg=TEXT,
-                   buttonbackground=PANEL2, insertbackground=TEXT, relief="flat", font=(FONT, 10)).pack(side="left")
-        tk.Label(flip, text="sec", bg=BG, fg=TEXT, font=(FONT, 10)).pack(side="left", padx=px(4))
-        row += 1
-
-        label("Collection")
-        col = tk.Frame(form, bg=BG)
-        col.grid(row=row, column=1, sticky="ew")
+        # ---- Records
+        f = tab("Records")
+        label(f, "Collection")
+        col = tk.Frame(f, bg=BG)
+        col.grid(row=f.row, column=1, sticky="ew")
         col_lbl = tk.Label(col, bg=BG, fg=MUTED, font=(FONT, 10), anchor="w",
                            text=f"{len(self.core.records)} records · {self.core.collection_file}"
                            if self.core.records else "No collection imported yet")
@@ -821,13 +903,100 @@ class VinylApp:
             if self.import_csv(parent=w):
                 col_lbl.config(text=f"{len(self.core.records)} records · {self.core.collection_file}")
         self.btn(col, "Import Discogs CSV…", do_import).pack(side="right")
-        row += 1
+        f.row += 1
+
+        v_token = tk.StringVar(value=cfg["discogs_token"])
+        label(f, "Discogs token (optional)", "Makes looking up covers & tracklists faster.")
+        tok = tk.Frame(f, bg=BG)
+        tok.grid(row=f.row, column=1, sticky="ew")
+        self.make_entry(tok, v_token, show="•", width=28).pack(side="left", ipady=px(3))
+        self.link(tok, "Get one ↗", "https://www.discogs.com/settings/developers", bg=BG).pack(side="left", padx=px(10))
+        f.row += 2
+
+        v_auto = tk.BooleanVar(value=cfg["auto_continue"])
+        v_flip = tk.StringVar(value=str(cfg["flip_seconds"]))
+        flip = tk.Frame(f, bg=BG)
+        flip.grid(row=f.row, column=0, columnspan=2, sticky="w", pady=px(10))
+        tk.Checkbutton(flip, text="When a side ends, continue with the next side after", variable=v_auto,
+                       bg=BG, fg=TEXT, selectcolor=PANEL2, activebackground=BG, activeforeground=TEXT,
+                       font=(FONT, 10)).pack(side="left")
+        tk.Spinbox(flip, from_=0, to=600, increment=5, textvariable=v_flip, width=4, bg=PANEL2, fg=TEXT,
+                   buttonbackground=PANEL2, insertbackground=TEXT, relief="flat", font=(FONT, 10)).pack(side="left")
+        tk.Label(flip, text="sec", bg=BG, fg=TEXT, font=(FONT, 10)).pack(side="left", padx=px(4))
+        f.row += 1
+
+        # ---- Sharing & tray
+        f = tab("Sharing & tray")
+        tk.Label(f, text="Now spinning channel", bg=BG, fg=TEXT, font=(FONT, 11, "bold"), anchor="w").grid(
+            row=f.row, column=0, columnspan=2, sticky="w")
+        f.row += 1
+        tk.Label(f, text="Post the records you play to a channel in a Discord server, like #now-spinning. "
+                         "A server admin makes a webhook for that channel (Edit Channel → Integrations → "
+                         "Webhooks → New Webhook → Copy Webhook URL). A record is posted after it has played "
+                         "for 30 seconds.",
+                 bg=BG, fg=MUTED, font=(FONT, 9), anchor="w", justify="left", wraplength=px(540)).grid(
+            row=f.row, column=0, columnspan=2, sticky="w", pady=(px(2), px(6)))
+        f.row += 1
+        v_share = tk.BooleanVar(value=cfg["share_enabled"])
+        check(f, "Post what I play", v_share, column=0)
+        f.row += 1
+        v_hook = tk.StringVar(value=cfg["share_webhook"])
+        label(f, "Webhook URL", "Keep it private: anyone who has this URL can post in that channel.")
+        hook = tk.Frame(f, bg=BG)
+        hook.grid(row=f.row, column=1, sticky="ew")
+        self.make_entry(hook, v_hook, show="•", width=30).pack(side="left", fill="x", expand=True, ipady=px(3))
+
+        def send_test():
+            url = v_hook.get().strip()
+            if not share.valid_webhook(url):
+                messagebox.showerror("Now spinning", "Paste a Discord webhook URL first. It starts with "
+                                     "https://discord.com/api/webhooks/", parent=w)
+                return
+
+            def work():
+                try:
+                    share.post_test(url, self.core.discord.status)
+                    self.ui.put(lambda: messagebox.showinfo("Now spinning", "Test message sent. Check the channel!",
+                                                            parent=w))
+                except Exception as e:
+                    msg = str(e)
+                    self.ui.put(lambda: messagebox.showerror("Now spinning", f"That didn't work:\n{msg}", parent=w))
+            threading.Thread(target=work, daemon=True).start()
+        self.btn(hook, "Send test", send_test).pack(side="left", padx=(px(8), 0))
+        f.row += 2
+
+        tk.Frame(f, bg=LINE, height=1).grid(row=f.row, column=0, columnspan=2, sticky="ew", pady=px(14))
+        f.row += 1
+        tk.Label(f, text="Tray & startup", bg=BG, fg=TEXT, font=(FONT, 11, "bold"), anchor="w").grid(
+            row=f.row, column=0, columnspan=2, sticky="w")
+        f.row += 1
+        v_tray = tk.BooleanVar(value=cfg["close_to_tray"])
+        tray_cb = check(f, "Closing the window keeps Vinyl Presence running in the tray (next to the clock)",
+                        v_tray, column=0)
+        f.row += 1
+        v_startup = tk.BooleanVar(value=tray.startup_enabled())
+        startup_cb = check(f, "Start Vinyl Presence when Windows starts (quietly, in the tray)", v_startup, column=0)
+        f.row += 1
+        if not self.tray:
+            tray_cb.config(state="disabled")
+            tk.Label(f, text="The tray icon needs the pystray package (pip install pystray).", bg=BG, fg=FAINT,
+                     font=(FONT, 8), anchor="w").grid(row=f.row, column=0, columnspan=2, sticky="w")
+            f.row += 1
+        if sys.platform != "win32":
+            startup_cb.config(state="disabled")
 
         def save():
             client = v_client.get().strip()
             if client and not client.isdigit():
+                tabs.select(0)
                 messagebox.showerror("Settings", "The Application ID is a long number, e.g. 1234567890123456789.",
                                      parent=w)
+                return
+            hook_url = v_hook.get().strip()
+            if v_share.get() and not share.valid_webhook(hook_url):
+                tabs.select(2)
+                messagebox.showerror("Settings", "To post what you play, paste the channel's webhook URL. It starts "
+                                     "with https://discord.com/api/webhooks/", parent=w)
                 return
             try:
                 flip_s = max(0, int(v_flip.get()))
@@ -840,7 +1009,13 @@ class VinylApp:
                 "card_title": card_key, "card_title_text": v_card_text.get().strip() or "Vinyl",
                 "show_discogs_button": v_button.get(), "vinyl_asset": v_asset.get().strip(),
                 "discogs_token": v_token.get().strip(), "auto_continue": v_auto.get(), "flip_seconds": flip_s,
+                "share_enabled": v_share.get(), "share_webhook": hook_url, "close_to_tray": v_tray.get(),
             })
+            if v_startup.get() != tray.startup_enabled():
+                try:
+                    tray.set_startup(v_startup.get())
+                except OSError as e:
+                    messagebox.showerror("Settings", f"Couldn't change Start with Windows:\n{e}", parent=w)
             w.destroy()
 
         bar = tk.Frame(pad, bg=BG)
@@ -927,9 +1102,62 @@ class VinylApp:
                                "Open the download page instead?", parent=self.root):
             webbrowser.open(self.update["page"])
 
+    # ------------------------------------------------------------ tray & windows
+
+    def _start_tray(self):
+        if not tray.available():
+            return
+        try:
+            self.tray = tray.Tray(
+                ASSETS / "vinyl.png", self._tray_now_text, lambda: bool(self.core.player.now),
+                on_open=lambda: self.ui.put(self.show_window),
+                on_stop=lambda: self.ui.put(lambda: self.bg(self.core.player.control, "stop")),
+                on_quit=lambda: self.ui.put(self.close))
+            tray.refresh_startup()
+        except Exception as e:  # no tray is fine; the window works as before
+            print(f"[tray] {e}")
+            self.tray = None
+
+    def _tray_now_text(self):
+        snap = self.core.player.snapshot()
+        if not snap:
+            return "Nothing playing"
+        rec = snap["record"]
+        title = snap["tracks"][snap["idx"]]["title"] if snap["idx"] is not None else rec["title"]
+        text = f"▶ {title} — {rec['artist']}"
+        return text if len(text) <= 60 else text[:59] + "…"
+
+    def show_window(self):
+        self.root.deiconify()
+        self.root.lift()
+        self.root.attributes("-topmost", True)
+        self.root.after(200, lambda: self.root.attributes("-topmost", False))
+        self.root.focus_force()
+
+    def on_window_close(self):
+        """The X button: keep running in the tray (if there is one), otherwise quit."""
+        if not (self.tray and self.core.config.get("close_to_tray", True)):
+            return self.close()
+        self.root.withdraw()
+        if not self.core.config.get("tray_hint_shown"):
+            self.tray.notify("Vinyl Presence keeps running here, so your status stays on. "
+                             "Right-click the record icon to quit.", "Still spinning")
+            self.core.update_config({"tray_hint_shown": True})
+
+    def open_stats(self):
+        if self.stats_win and self.stats_win.win.winfo_exists():
+            self.stats_win.render()
+            self.stats_win.win.lift()
+            return
+        self.core.player.flush()  # include the record that's playing right now
+        self.stats_win = StatsWindow(self)
+
     def close(self):
+        """Really quit: clear the Discord status and remove the tray icon."""
         self.closed = True
         self.root.withdraw()
+        if self.tray:
+            self.tray.stop()
         self.core.shutdown()
         self.root.destroy()
 
@@ -977,11 +1205,18 @@ def main():
         except (AttributeError, OSError):
             pass
     lock = single_instance_lock()
-    root = tk.Tk()
     if not lock:
-        root.withdraw()
-        messagebox.showinfo("Vinyl Presence", "Vinyl Presence is already open. Check your taskbar.")
+        # Already running (maybe hidden in the tray): ask that copy to show its window.
+        SHOW_REQUEST.touch()
+        time.sleep(2)
+        if SHOW_REQUEST.exists():  # an older version that doesn't listen for this
+            SHOW_REQUEST.unlink(missing_ok=True)
+            root = tk.Tk()
+            root.withdraw()
+            messagebox.showinfo("Vinyl Presence", "Vinyl Presence is already open. Check your taskbar.")
         return
+    SHOW_REQUEST.unlink(missing_ok=True)
+    root = tk.Tk()
     root.title("Vinyl Presence")
     root.configure(bg=BG)
     scale = root.winfo_fpixels("1i") / 96
@@ -991,7 +1226,9 @@ def main():
     dark_titlebar(root)
     core = Core()
     app = VinylApp(root, core)
-    root.protocol("WM_DELETE_WINDOW", app.close)
+    root.protocol("WM_DELETE_WINDOW", app.on_window_close)
+    if "--tray" in sys.argv and app.tray:  # started with Windows: stay in the tray
+        root.withdraw()
     root.mainloop()
 
 

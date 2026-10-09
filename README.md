@@ -21,6 +21,10 @@ spinning actual vinyl:
   Enter. Small typos are fine.
 - **Sides and tracks:** it knows each side's tracklist and track lengths, moves to the next track by
   itself, and asks you to flip the record when a side ends.
+- **Cover view:** browse your collection as a wall of album covers, like flipping through your shelf.
+- **Listening stats:** hours listened, your most played records and artists, and hours per month.
+- **Now spinning channel:** optionally post what you play to a channel in a Discord server.
+- **Stays out of the way:** it runs in the tray next to the clock and can start with Windows.
 - **A normal Windows app:** nothing to host, no account, no server.
 
 ## Download
@@ -58,9 +62,14 @@ downloads and installs it, and the app restarts by itself. If a record is playin
   *Surprise me* picks a random record.
 - It starts at side A. Click **B**, **C**, and so on when you put on another side, or double-click any
   track if you dropped the needle somewhere else.
+- Clicked play a bit early or late? **−10s** and **+10s** move the timer so the progress bar matches
+  the record.
 - When a side ends, the app asks **Flip the record?**. You can also have it continue automatically.
-- Click **Stop** when you're done. Closing the window also clears your status. If you forget, the status
-  clears itself 10 minutes after the last side ends, or after an hour when track lengths are unknown.
+- Click **Stop** when you're done. If you forget, the status clears itself 10 minutes after the last side
+  ends, or after an hour when track lengths are unknown.
+- **List / Covers** switches between the text list and the cover wall. **Stats** shows your listening.
+- Closing the window keeps the app running in the tray, so your status stays on. Click the record icon
+  next to the clock to open it again, or right-click it and choose **Quit**.
 
 When the track lengths are known, your status shows the current track with a progress bar. When they
 aren't, it shows the album with an elapsed timer.
@@ -76,6 +85,16 @@ aren't, it shows the album with an elapsed timer.
 | Discogs token | Optional. Discogs allows more lookups per minute with it ([get one](https://www.discogs.com/settings/developers)) |
 | Continue with the next side | Flip automatically after *n* seconds instead of waiting for you |
 | Import Discogs CSV | Load a newer export after you buy records |
+| Post what I play | Posts each record you play (after 30 seconds) to a Discord channel through its webhook URL |
+| Keep running in the tray | Closing the window hides it to the tray instead of quitting |
+| Start with Windows | Starts Vinyl Presence quietly in the tray when you log in |
+
+### Setting up a "now spinning" channel
+
+A server admin opens the channel's settings in Discord (*Edit Channel → Integrations → Webhooks →
+New Webhook*), then clicks **Copy Webhook URL**. Paste it under *Settings → Sharing & tray*, tick
+**Post what I play** and click **Send test**. Anyone who has a webhook URL can post in that channel, so
+only share it with people you trust.
 
 ## What goes online
 
@@ -83,8 +102,10 @@ aren't, it shows the album with an elapsed timer.
 - **Discogs and Deezer:** to look up each record's cover, tracklist and track lengths (vinyl entries on
   Discogs usually have no lengths). Each record is looked up once, and the results are cached.
 - **GitHub:** checks once per start whether a newer version is out.
+- **Your Discord channel:** only if you turn on *Post what I play*, and only the record's title,
+  artist, cover and Discogs link.
 
-Your collection and history never leave your PC.
+Your collection, history and stats never leave your PC.
 
 ## Run from source
 
@@ -94,7 +115,7 @@ You need [Python](https://www.python.org/downloads/) 3.10 or newer.
 git clone https://github.com/Y0ghurty/vinyl-presence.git
 ```
 
-Then double-click `start.bat`, or run `pythonw app.py`. When you run it from source, settings and data
+Then double-click `start.bat` (it installs Pillow and pystray the first time), or run `pythonw app.py`. When you run it from source, settings and data
 are kept in the project folder, and you can also drop your Discogs CSV in there instead of importing it.
 
 | File | What it does |
@@ -103,6 +124,10 @@ are kept in the project folder, and you can also drop your Discogs CSV in there 
 | `core.py` | Collection, search and the player (sides, tracks, timers) |
 | `metadata.py` | Looks up covers and tracklists (Discogs, Deezer) |
 | `discord_ipc.py` | Talks to the Discord app |
+| `covers.py` | The cover wall and its thumbnail cache |
+| `stats.py`, `stats_view.py` | Listening stats and the window that shows them |
+| `share.py` | Posts "now spinning" messages to a Discord webhook |
+| `tray.py` | The tray icon and Start with Windows |
 | `updater.py` | Checks GitHub for a newer release and lets the exe update itself |
 | `version.py` | Version number, set automatically for releases |
 

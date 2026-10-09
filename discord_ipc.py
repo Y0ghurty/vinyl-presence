@@ -10,6 +10,7 @@ import socket
 import struct
 import sys
 import threading
+import time
 import uuid
 
 OP_HANDSHAKE, OP_FRAME, OP_CLOSE, OP_PING, OP_PONG = range(5)
@@ -143,6 +144,7 @@ class PresenceWorker(threading.Thread):
     """
 
     HEARTBEAT = 20
+    MIN_INTERVAL = 1.5  # Discord allows ~5 updates per 20 s; bursts (e.g. nudging the timer) get merged
 
     def __init__(self):
         super().__init__(daemon=True, name="discord-presence")
@@ -154,6 +156,7 @@ class PresenceWorker(threading.Thread):
         self._stopping = False
         self._ipc = None
         self._compat = 0
+        self._last_send = 0.0
         self.status = {"state": "starting", "user": None, "error": None}
 
     def set_client_id(self, client_id):
@@ -175,6 +178,10 @@ class PresenceWorker(threading.Thread):
         while True:
             with self._cond:
                 self._cond.wait_for(lambda: self._dirty, timeout=self.HEARTBEAT)
+            wait = self.MIN_INTERVAL - (time.monotonic() - self._last_send)
+            if wait > 0 and not self._stopping:
+                time.sleep(wait)  # then send whatever is newest by now
+            with self._cond:
                 activity, client_id, reset = self._activity, self._client_id, self._reset
                 self._dirty = self._reset = False
             if self._stopping:
@@ -200,7 +207,9 @@ class PresenceWorker(threading.Thread):
                     user = ipc.connect()
                     self._ipc = ipc
                     name = user.get("global_name") or user.get("username")
-                    self.status = {"state": "connected", "user": name, "error": None}
+                    avatar = (f"https://cdn.discordapp.com/avatars/{user['id']}/{user['avatar']}.png?size=128"
+                              if user.get("id") and user.get("avatar") else None)
+                    self.status = {"state": "connected", "user": name, "avatar": avatar, "error": None}
                     print(f"[discord] connected as {name}")
                 self._send(activity)
             except InvalidClientId as e:
@@ -214,6 +223,7 @@ class PresenceWorker(threading.Thread):
     def _send(self, activity):
         while True:
             try:
+                self._last_send = time.monotonic()
                 resp = self._ipc.set_activity(_downgrade(activity, self._compat))
                 self.status["error"] = None
                 self._check_name(activity, resp)

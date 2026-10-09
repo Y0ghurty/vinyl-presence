@@ -13,6 +13,7 @@ import time
 import urllib.request
 from pathlib import Path
 
+import share
 from discord_ipc import PresenceWorker
 from metadata import USER_AGENT, Library, clean_name, norm
 
@@ -51,8 +52,16 @@ DEFAULT_CONFIG = {
     # Clear the status after this long when track lengths are unknown and you don't touch anything
     "auto_stop_minutes": 60,
     "list_sort": "Artist A–Z",
+    "list_view": "list",  # "list" or "covers"
+    # Closing the window keeps the app running in the tray (when the tray icon is available)
+    "close_to_tray": True,
+    "tray_hint_shown": False,
+    # Post records you play to a Discord channel through a webhook
+    "share_enabled": False,
+    "share_webhook": "",
 }
 SIDE_END_CLEAR_MINUTES = 10
+SHARE_AFTER_SECONDS = 30  # a record must play this long before it's posted, so mis-clicks aren't
 STATUS_DISPLAY_TYPES = {"app": 0, "artist": 1, "title": 2}
 # First word of the Discogs format -> (how to say it, what it's played on)
 MEDIA = {
@@ -178,6 +187,7 @@ class Core:
         self.discord = PresenceWorker()
         self.discord.set_client_id(self.config["discord_client_id"])
         self.discord.start()
+        self._shared = {}  # record id -> when it was last posted to the "now spinning" channel
         self.app_assets = None  # art assets uploaded to the Discord app (None = not checked yet)
         self._assets_wake = threading.Event()
         self.player = Player(self)
@@ -245,8 +255,25 @@ class Core:
         self.player.push()
 
     def add_history(self, rid):
-        self.history = [{"id": int(rid), "at": int(time.time())}] + self.history[:499]
+        self.history = [{"id": int(rid), "at": int(time.time())}] + self.history[:19999]
         save_json(HISTORY_PATH, self.history)
+
+    def set_listened(self, rid, secs):
+        """Store how long the current session of a record was listened to (for the stats)."""
+        if self.history and self.history[0]["id"] == int(rid):
+            self.history[0]["secs"] = int(secs)
+            save_json(HISTORY_PATH, self.history)
+
+    def share_now_spinning(self, rec, info):
+        url = self.config["share_webhook"].strip()
+        if not url or time.time() - self._shared.get(rec["id"], 0) < 3 * 3600:
+            return  # don't post the same record again within a few hours
+        self._shared[rec["id"]] = time.time()
+        try:
+            share.post_record(url, rec, info, self.discord.status)
+            print(f"[share] posted {rec['artist']} - {rec['title']}")
+        except (OSError, ValueError) as e:
+            print(f"[share] couldn't post: {e}")
 
     def play_stats(self):
         plays, last = {}, {}
@@ -256,6 +283,7 @@ class Core:
         return plays, last
 
     def shutdown(self):
+        self.player.flush()
         self.library.save()
         self.discord.shutdown()
 
@@ -278,7 +306,10 @@ class Player:
         info = self.core.library.get(rec) or {}
         sides = self._group_sides(info)
         with self.lock:
-            same = bool(self.now) and self.now["record"]["id"] == rec["id"]
+            prev = self.now
+            same = bool(prev) and prev["record"]["id"] == rec["id"]
+            if prev and not same:
+                self._flush_listened(prev)
             t = now_ms()
             if side not in sides:
                 side = next(iter(sides), None)
@@ -287,11 +318,25 @@ class Player:
             self.now = {
                 "record": rec, "info": info, "sides": sides, "side": side, "idx": idx,
                 "manual": track is not None,
-                "started": self.now["started"] if same else t,
+                "started": prev["started"] if same else t,
                 "track_started": t, "side_done": False, "side_done_at": None, "touched": t,
+                # per listening session, kept when you only switch sides
+                "listened": prev["listened"] if same else 0.0, "posted": prev["posted"] if same else False,
             }
         if not same:
             self.core.add_history(rec["id"])
+        self.push()
+
+    def nudge(self, seconds):
+        """Move the timer when you clicked play a bit before or after the needle dropped (+ = further along)."""
+        with self.lock:
+            n = self.now
+            if not n or n["side_done"]:
+                return
+            t = now_ms()
+            key = "track_started" if n["side"] else "started"
+            n[key] = min(n[key] - seconds * 1000, t)
+            n["touched"] = t
         self.push()
 
     def control(self, action, side=None):
@@ -325,12 +370,23 @@ class Player:
 
     def stop(self):
         with self.lock:
+            if self.now:
+                self._flush_listened(self.now)
             self.now = None
         self.push()
 
+    def _flush_listened(self, n):
+        self.core.set_listened(n["record"]["id"], n["listened"])
+
+    def flush(self):
+        with self.lock:
+            if self.now:
+                self._flush_listened(self.now)
+
     # -- surviving a restart (used by the updater)
 
-    _STATE_KEYS = ("side", "idx", "manual", "started", "track_started", "side_done", "side_done_at", "touched")
+    _STATE_KEYS = ("side", "idx", "manual", "started", "track_started", "side_done", "side_done_at", "touched",
+                   "listened", "posted")
 
     def save_state(self):
         with self.lock:
@@ -356,7 +412,8 @@ class Player:
         if (state["side"] is not None and not tracks) or (state["idx"] is not None and state["idx"] >= len(tracks)):
             return
         with self.lock:
-            self.now = {"record": rec, "info": info, "sides": sides, **{k: state[k] for k in self._STATE_KEYS}}
+            self.now = {"record": rec, "info": info, "sides": sides, "listened": 0.0, "posted": False,
+                        **{k: state[k] for k in self._STATE_KEYS if k in state}}
         print(f"[player] resumed {rec['artist']} - {rec['title']} after the update")
         self.push()
 
@@ -385,21 +442,31 @@ class Player:
         return None
 
     def _ticker(self):
+        last = now_ms()
         while True:
             time.sleep(1)
+            t = now_ms()
             try:
-                self._tick()
+                self._tick(min(t - last, 5000) / 1000)  # cap, so a sleeping PC doesn't count as listening
             except Exception as e:  # keep ticking no matter what
                 print(f"[player] {e}")
+            last = t
 
-    def _tick(self):
-        changed, flip_to, stop = False, None, False
+    def _tick(self, dt):
+        changed, flip_to, stop, share = False, None, False, None
         cfg = self.core.config
         with self.lock:
             n = self.now
             if not n:
                 return
             t = now_ms()
+            if not n["side_done"]:
+                n["listened"] += dt
+                if n["listened"] // 60 != (n["listened"] - dt) // 60:  # save once a minute
+                    self._flush_listened(n)
+                if not n["posted"] and n["listened"] >= SHARE_AFTER_SECONDS and cfg.get("share_enabled"):
+                    n["posted"] = True
+                    share = (n["record"], n["info"])
             tracks = n["sides"].get(n["side"]) or []
             if self._timed(n) and not n["side_done"] and n["idx"] is not None:
                 # Advance through tracks by their lengths (several at once if the PC slept)
@@ -422,6 +489,8 @@ class Player:
                     stop = True
             elif not self._timed(n) and t - n["touched"] >= cfg.get("auto_stop_minutes", 60) * 60000:
                 stop = True
+        if share:
+            threading.Thread(target=self.core.share_now_spinning, args=share, daemon=True, name="share").start()
         if flip_to:
             self.play(*flip_to)
         elif stop:

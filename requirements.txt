@@ -1,2 +1,3 @@
-# Optional: shows album covers inside the window. Everything else uses only the standard library.
-pillow
+# Optional extras; everything else uses only the standard library.
+pillow   # album covers in the window and the cover view
+pystray  # tray icon
