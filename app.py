@@ -6,10 +6,8 @@ A normal desktop window, nothing is hosted. Double-click start.bat (or run
 import ctypes
 import hashlib
 import io
-import json
 import queue
 import random
-import re
 import shutil
 import subprocess
 import sys
@@ -24,7 +22,8 @@ from tkinter import filedialog, messagebox, ttk
 
 from core import ASSETS, DATA, ROOT, Core, search
 from metadata import USER_AGENT
-from version import GITHUB_REPO, VERSION
+import updater
+from version import VERSION
 
 try:
     from PIL import Image, ImageDraw, ImageOps, ImageTk
@@ -73,10 +72,6 @@ def short_format(fmt):
     return fmt[7:] if fmt.startswith("Vinyl, ") else fmt
 
 
-def version_tuple(v):
-    return tuple(int(x) for x in re.findall(r"\d+", v or "")[:3])
-
-
 def vinyl_image(size):
     path = ASSETS / "vinyl.png"
     if Image:
@@ -103,7 +98,11 @@ class VinylApp:
         self.refresh_list()
         self.entry.focus_set()
         self.root.after(150, self._loop)
+        self.update = None
+        self.updating = False
+        self.closed = False
         threading.Thread(target=self._check_update, daemon=True, name="update-check").start()
+        threading.Thread(target=core.player.restore_state, daemon=True, name="resume").start()
         if not core.config["discord_client_id"]:
             self.root.after(600, self.open_settings)
 
@@ -461,10 +460,12 @@ class VinylApp:
 
     def _loop(self):
         try:
-            while True:
+            while not self.closed:
                 self.ui.get_nowait()()
         except queue.Empty:
             pass
+        if self.closed:  # e.g. the updater just closed the window
+            return
         snap = self.core.player.snapshot()
         sig = (self.loading, snap and (snap["record"]["id"], snap["side"], snap["idx"], snap["side_done"],
                                        snap["cover"], len(snap["tracks"])))
@@ -867,26 +868,67 @@ class VinylApp:
     # ------------------------------------------------------------ updates
 
     def _check_update(self):
-        if not GITHUB_REPO:
-            return
-        req = urllib.request.Request(f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest",
-                                     headers={"User-Agent": USER_AGENT, "Accept": "application/vnd.github+json"})
         try:
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                release = json.load(resp)
+            update = updater.check()
         except (OSError, ValueError):
             return
-        latest = release.get("tag_name") or ""
-        if version_tuple(latest) > version_tuple(VERSION):
-            print(f"[update] {latest} is available (running {VERSION})")
-            self.ui.put(lambda: self._show_update(latest, release.get("html_url")))
+        if update:
+            print(f"[update] {update['tag']} is available (running {VERSION})")
+            self.ui.put(lambda: self._show_update(update))
 
-    def _show_update(self, latest, url):
-        self.update_lbl.config(text=f"Update available: {latest} ↗")
-        self.update_lbl.bind("<Button-1>", lambda e: webbrowser.open(url))
-        self.update_lbl.pack(side="right", padx=(0, self.px(4)))
+    def _show_update(self, update):
+        self.update = update
+        if updater.can_self_update() and update["exe_url"]:
+            self.update_btn = self.btn(self.update_lbl.master, f"↓  Update to {update['tag']}", self.start_update,
+                                       kind="accent")
+            self.update_btn.pack(side="right", padx=(0, self.px(10)))
+        else:  # running from source: point to the release page
+            self.update_lbl.config(text=f"Update available: {update['tag']} ↗")
+            self.update_lbl.bind("<Button-1>", lambda e: webbrowser.open(update["page"]))
+            self.update_lbl.pack(side="right", padx=(0, self.px(4)))
+
+    def start_update(self):
+        if self.updating:
+            return
+        if not messagebox.askyesno(
+                "Update Vinyl Presence",
+                f"Download and install {self.update['tag']} now?\n\nVinyl Presence restarts by itself. "
+                "If a record is playing, it keeps playing.", parent=self.root):
+            return
+        self.updating = True
+        self.update_btn.config(text="Downloading… 0%")
+
+        def work():
+            try:
+                new = updater.download(self.update, lambda pct: self.ui.put(
+                    lambda: self.update_btn.config(text=f"Downloading… {pct}%")))
+            except Exception as e:
+                msg = str(e)
+                self.ui.put(lambda: self._update_failed(msg))
+                return
+            self.ui.put(lambda: self._install_update(new))
+        threading.Thread(target=work, daemon=True, name="update-download").start()
+
+    def _install_update(self, new):
+        self.update_btn.config(text="Restarting…")
+        self.root.update_idletasks()
+        try:
+            self.core.player.save_state()
+            updater.restart_into(new)
+        except OSError as e:
+            return self._update_failed(str(e))
+        print(f"[update] installing {self.update['tag']} and restarting")
+        self.close()
+
+    def _update_failed(self, msg):
+        self.updating = False
+        self.update_btn.config(text=f"↓  Update to {self.update['tag']}")
+        if messagebox.askyesno("Update failed", f"The update couldn't be installed:\n{msg}\n\n"
+                               "Open the download page instead?", parent=self.root):
+            webbrowser.open(self.update["page"])
 
     def close(self):
+        self.closed = True
         self.root.withdraw()
         self.core.shutdown()
         self.root.destroy()
@@ -923,6 +965,7 @@ def single_instance_lock():
 
 def main():
     DATA.mkdir(parents=True, exist_ok=True)
+    updater.cleanup()
     if sys.stdout is None:  # started with pythonw: keep a log instead of a console
         sys.stdout = sys.stderr = open(DATA / "log.txt", "a", encoding="utf-8", buffering=1)
     else:  # a Windows console can't print every artist name ("33⅓", "Sigur Rós", ...)

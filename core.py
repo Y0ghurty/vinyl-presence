@@ -30,6 +30,7 @@ else:
 DATA = ROOT / "data"
 CONFIG_PATH = ROOT / "config.json"
 HISTORY_PATH = DATA / "history.json"
+RESUME_PATH = DATA / "resume.json"
 IMPORTED_CSV = DATA / "collection.csv"
 
 DEFAULT_CONFIG = {
@@ -275,9 +276,7 @@ class Player:
         if not rec:
             raise KeyError("Record not in your collection")
         info = self.core.library.get(rec) or {}
-        sides = {}
-        for t in info.get("tracks") or []:
-            sides.setdefault(t["side"], []).append(t)
+        sides = self._group_sides(info)
         with self.lock:
             same = bool(self.now) and self.now["record"]["id"] == rec["id"]
             t = now_ms()
@@ -329,7 +328,46 @@ class Player:
             self.now = None
         self.push()
 
+    # -- surviving a restart (used by the updater)
+
+    _STATE_KEYS = ("side", "idx", "manual", "started", "track_started", "side_done", "side_done_at", "touched")
+
+    def save_state(self):
+        with self.lock:
+            n = self.now
+            if not n:
+                return
+            state = {k: n[k] for k in self._STATE_KEYS}
+            state.update(id=n["record"]["id"], saved=now_ms())
+        save_json(RESUME_PATH, state)
+
+    def restore_state(self):
+        """Pick up the record that was playing before an update restarted the app."""
+        state = load_json(RESUME_PATH, None)
+        RESUME_PATH.unlink(missing_ok=True)
+        if not state or now_ms() - state.get("saved", 0) > 10 * 60000:
+            return
+        rec = self.core.records.get(str(state.get("id")))
+        if not rec:
+            return
+        info = self.core.library.get(rec) or {}
+        sides = self._group_sides(info)
+        tracks = sides.get(state["side"]) or []
+        if (state["side"] is not None and not tracks) or (state["idx"] is not None and state["idx"] >= len(tracks)):
+            return
+        with self.lock:
+            self.now = {"record": rec, "info": info, "sides": sides, **{k: state[k] for k in self._STATE_KEYS}}
+        print(f"[player] resumed {rec['artist']} - {rec['title']} after the update")
+        self.push()
+
     # -- state helpers
+
+    @staticmethod
+    def _group_sides(info):
+        sides = {}
+        for t in info.get("tracks") or []:
+            sides.setdefault(t["side"], []).append(t)
+        return sides
 
     @staticmethod
     def _timed(n):

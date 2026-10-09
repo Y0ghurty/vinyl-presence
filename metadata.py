@@ -182,6 +182,7 @@ class Library:
         self.cache_path = cache_path
         self.get_token = get_token
         self.lock = threading.Lock()
+        self._save_lock = threading.Lock()
         self.version = 0
         self.last_error = None
         self._fetch_locks = {}
@@ -270,9 +271,10 @@ class Library:
                 return
             self._dirty = 0
             data = json.dumps({"_v": CACHE_VERSION, "releases": self.cache}, ensure_ascii=False)
-        tmp = self.cache_path.with_suffix(".tmp")
-        tmp.write_text(data, "utf-8")
-        tmp.replace(self.cache_path)
+        with self._save_lock:  # several threads save; only one may use the temp file at a time
+            tmp = self.cache_path.with_suffix(".tmp")
+            tmp.write_text(data, "utf-8")
+            tmp.replace(self.cache_path)
 
     def prefetch(self, records):
         """Queue the whole collection for background lookup (≈1 record/sec with a token)."""

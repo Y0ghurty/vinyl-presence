@@ -29,8 +29,10 @@ spinning actual vinyl:
 2. Double-click it. The app isn't code-signed, so Windows may say *"Windows protected your PC"*: click
    **More info → Run anyway**.
 
-Your settings, play history and cached covers are stored in `%APPDATA%\Vinyl Presence`. When a new
-version comes out, the app shows *Update available* at the top.
+Your settings, play history and cached covers are stored in `%APPDATA%\Vinyl Presence`.
+
+**Updates:** when a new version comes out, an **Update** button appears at the top of the app. One click
+downloads and installs it, and the app restarts by itself. If a record is playing, it keeps playing.
 
 ## One-time setup (about 5 minutes)
 
@@ -101,6 +103,7 @@ are kept in the project folder, and you can also drop your Discogs CSV in there 
 | `core.py` | Collection, search and the player (sides, tracks, timers) |
 | `metadata.py` | Looks up covers and tracklists (Discogs, Deezer) |
 | `discord_ipc.py` | Talks to the Discord app |
+| `updater.py` | Checks GitHub for a newer release and lets the exe update itself |
 | `version.py` | Version number, set automatically for releases |
 
 ## Publishing a new version
@@ -116,7 +119,9 @@ git push origin v1.1.0
 ```
 
 GitHub Actions then builds `VinylPresence.exe` and publishes it as a release with automatic release
-notes (see `.github/workflows/release.yml`). Everyone running an older version sees *Update available*.
+notes (see `.github/workflows/release.yml`). Everyone running an older version gets the Update button.
+Release assets must keep the name `VinylPresence.exe`; the updater downloads the `.exe` attached to the
+latest release.
 
 ## Need help?
 
