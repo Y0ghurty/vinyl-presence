@@ -15,6 +15,7 @@ from pathlib import Path
 
 import share
 from discord_ipc import PresenceWorker
+from lastfm import LastFM
 from server_bot import BotRunner
 from metadata import USER_AGENT, CollectionError, Library, clean_name, fetch_collection, norm
 
@@ -67,6 +68,10 @@ DEFAULT_CONFIG = {
     # Server owners: run a bot that posts what members play (they opt in with /nowspinning on)
     "bot_enabled": False,
     "bot_token": "",
+    # Last.fm scrobbling (session key from connecting in Settings)
+    "lastfm_enabled": True,
+    "lastfm_session": "",
+    "lastfm_user": "",
 }
 SIDE_END_CLEAR_MINUTES = 10
 SHARE_AFTER_SECONDS = 30  # a record must play this long before it's posted, so mis-clicks aren't
@@ -199,6 +204,7 @@ class Core:
         self.sync_status = {"state": "off"}
         self._sync_wake = threading.Event()
         self.library = Library(DATA / "releases.json", lambda: self.config.get("discogs_token", "").strip())
+        self.lastfm = LastFM(self, DATA / "scrobbles.json")
         self.discord = PresenceWorker()
         self.discord.set_client_id(self.config["discord_client_id"])
         self.discord.start()
@@ -399,9 +405,11 @@ class Player:
         with self.lock:
             prev = self.now
             same = bool(prev) and prev["record"]["id"] == rec["id"]
+            t = now_ms()
+            if prev:
+                self._end_track(prev, t)
             if prev and not same:
                 self._flush_listened(prev)
-            t = now_ms()
             if side not in sides:
                 side = next(iter(sides), None)
             tracks = sides.get(side) or []
@@ -414,6 +422,7 @@ class Player:
                 # per listening session, kept when you only switch sides
                 "listened": prev["listened"] if same else 0.0, "posted": prev["posted"] if same else False,
             }
+            self._start_track(self.now)
         if not same:
             self.core.add_history(rec["id"])
         self.push()
@@ -449,12 +458,14 @@ class Player:
                     idx += 1
                 elif action == "prev" and (n["side_done"] or t - n["track_started"] < 4000 or not self._track_mode(n)):
                     idx -= 1
+                self._end_track(n, t)
                 n["manual"] = n["manual"] or not self._timed(n)
                 n["touched"] = t
                 if idx >= len(tracks):
                     n["side_done"], n["side_done_at"] = True, t
                 else:
                     n["idx"], n["track_started"], n["side_done"] = max(idx, 0), t, False
+                    self._start_track(n)
         if action == "side":
             return self.play(rid, side)
         self.push()
@@ -462,9 +473,21 @@ class Player:
     def stop(self):
         with self.lock:
             if self.now:
+                self._end_track(self.now, now_ms())
                 self._flush_listened(self.now)
             self.now = None
         self.push()
+
+    # -- Last.fm: a track that played long enough is scrobbled when it ends
+
+    def _end_track(self, n, ended_ms):
+        if self._track_mode(n):
+            track = (n["sides"].get(n["side"]) or [])[n["idx"]]
+            self.core.lastfm.track_ended(n["record"], track, n["track_started"], ended_ms, manual=n["manual"])
+
+    def _start_track(self, n):
+        if self._track_mode(n):
+            self.core.lastfm.now_playing(n["record"], (n["sides"].get(n["side"]) or [])[n["idx"]])
 
     def _flush_listened(self, n):
         self.core.set_listened(n["record"]["id"], n["listened"])
@@ -506,6 +529,9 @@ class Player:
             self.now = {"record": rec, "info": info, "sides": sides, "listened": 0.0, "posted": False,
                         **{k: state[k] for k in self._STATE_KEYS if k in state}}
         print(f"[player] resumed {rec['artist']} - {rec['title']} after the update")
+        with self.lock:
+            if self.now:
+                self._start_track(self.now)
         self.push()
 
     # -- state helpers
@@ -566,11 +592,14 @@ class Player:
                     if t < end:
                         break
                     changed = True
+                    self._end_track(n, end)
                     if n["idx"] + 1 < len(tracks):
                         n["idx"] += 1
                         n["track_started"] = end
                     else:
                         n["side_done"], n["side_done_at"] = True, end
+                if changed and not n["side_done"]:
+                    self._start_track(n)
             if n["side_done"]:
                 waited = t - n["side_done_at"]
                 nxt = self._next_side(n)

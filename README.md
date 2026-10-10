@@ -23,6 +23,7 @@ spinning actual vinyl:
   itself, and asks you to flip the record when a side ends.
 - **Cover view:** browse your collection as a wall of album covers, like flipping through your shelf.
 - **Listening stats:** hours listened, your most played records and artists, and hours per month.
+- **Last.fm scrobbling:** the tracks you play on your turntable count on your Last.fm profile.
 - **Now spinning channel:** optionally post what you play to a channel in a Discord server, or, as a
   server owner, run a bot that posts what all your members play.
 - **Stays out of the way:** it runs in the tray next to the clock and can start with Windows.
@@ -89,6 +90,7 @@ aren't, it shows the album with an elapsed timer.
 | Import Discogs CSV | Load a newer export after you buy records |
 | Post what I play | Posts each record you play (after 30 seconds) to a Discord channel through its webhook URL |
 | Keep running in the tray | Closing the window hides it to the tray instead of quitting |
+| Last.fm | **Connect Last.fm** opens last.fm to approve the app; after that, tracks are scrobbled once they've played for half their length or 4 minutes |
 | Start with Windows | Starts Vinyl Presence quietly in the tray when you log in |
 
 ### Setting up a "now spinning" channel
@@ -127,6 +129,7 @@ with Windows).
 - **Your Discord channel:** only if you turn on *Post what I play*, and only the record's title,
   artist, cover and Discogs link.
 - **Server bot:** only if you run one; it connects to Discord as your bot.
+- **Last.fm:** only if you connect it; the tracks you play are scrobbled to your account.
 
 Your collection, history and stats never leave your PC.
 
@@ -151,6 +154,7 @@ are kept in the project folder, and you can also drop your Discogs CSV in there 
 | `stats.py`, `stats_view.py` | Listening stats and the window that shows them |
 | `share.py` | Posts "now spinning" messages to a Discord webhook |
 | `server_bot.py` | The optional now-spinning bot for server owners |
+| `lastfm.py` | Last.fm sign-in and scrobbling (with an offline queue) |
 | `tray.py` | The tray icon and Start with Windows |
 | `updater.py` | Checks GitHub for a newer release and lets the exe update itself |
 | `version.py` | Version number, set automatically for releases |
@@ -166,6 +170,11 @@ git tag v1.1.0
 ```bash
 git push origin v1.1.0
 ```
+
+The build reads the Last.fm API key from the repository secrets `LASTFM_API_KEY` and
+`LASTFM_SHARED_SECRET` (*Settings → Secrets and variables → Actions*). Without them it still builds, just
+without Last.fm. To use Last.fm when running from source, put your own [Last.fm API account](https://www.last.fm/api/account/create)
+in `lastfm_keys.py` (`API_KEY = "..."`, `SHARED_SECRET = "..."`); that file is never committed.
 
 GitHub Actions then builds `VinylPresence.exe` and publishes it as a release with automatic release
 notes (see `.github/workflows/release.yml`). Everyone running an older version gets the Update button.

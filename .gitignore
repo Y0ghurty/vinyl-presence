@@ -9,3 +9,6 @@ __pycache__/
 build/
 dist/
 *.spec
+
+# Last.fm API key and secret (filled in locally; the release build gets them from GitHub secrets)
+lastfm_keys.py

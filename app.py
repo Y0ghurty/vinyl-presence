@@ -20,6 +20,7 @@ import webbrowser
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
+import lastfm
 import server_bot
 import share
 import tray
@@ -1130,9 +1131,104 @@ class VinylApp:
             w.after(1000, refresh_bot_status)
         refresh_bot_status()
 
+        # ---- Last.fm
+        f = tab("Last.fm")
+        tk.Label(f, text="Last.fm scrobbling", bg=BG, fg=TEXT, font=(FONT, 11, "bold"), anchor="w").grid(
+            row=f.row, column=0, columnspan=2, sticky="w")
+        f.row += 1
+        tk.Label(f, text="The tracks you play on your turntable count on your Last.fm profile, like music from "
+                         "Spotify. While a track plays, your profile shows it as Scrobbling now; it's scrobbled once "
+                         "it has played for half its length or 4 minutes. Records without track lengths only "
+                         "scrobble tracks you double-click yourself.",
+                 bg=BG, fg=MUTED, font=(FONT, 9), anchor="w", justify="left", wraplength=px(540)).grid(
+            row=f.row, column=0, columnspan=2, sticky="w", pady=(px(2), px(10)))
+        f.row += 1
+        v_lfm = tk.BooleanVar(value=cfg["lastfm_enabled"])
+        lfm_status = tk.Label(f, bg=BG, fg=MUTED, font=(FONT, 10), anchor="w", justify="left", wraplength=px(540))
+        lfm_buttons = tk.Frame(f, bg=BG)
+        if not lastfm.available():
+            tk.Label(f, text="This copy of Vinyl Presence has no Last.fm API key, so scrobbling is off. "
+                             "(Running from source? Fill in lastfm_keys.py.)",
+                     bg=BG, fg=FAINT, font=(FONT, 9), anchor="w", justify="left", wraplength=px(540)).grid(
+                row=f.row, column=0, columnspan=2, sticky="w")
+            f.row += 1
+        else:
+            lfm_status.grid(row=f.row, column=0, columnspan=2, sticky="w")
+            f.row += 1
+            lfm_buttons.grid(row=f.row, column=0, columnspan=2, sticky="w", pady=(px(8), px(4)))
+            f.row += 1
+            check(f, "Scrobble what I play", v_lfm, column=0)
+            f.row += 1
+        lfm_extra = tk.Label(f, bg=BG, fg=FAINT, font=(FONT, 9), anchor="w", justify="left", wraplength=px(540))
+        lfm_extra.grid(row=f.row, column=0, columnspan=2, sticky="w", pady=(px(6), 0))
+        f.row += 1
+        lfm_state = {"busy": None}  # text while connecting
+
+        def lfm_connect():
+            if lfm_state["busy"]:
+                return
+            lfm_state["busy"] = "Opening Last.fm in your browser…"
+
+            def work():
+                try:
+                    token, url = self.core.lastfm.start_connect()
+                    self.ui.put(lambda: webbrowser.open(url))
+                    lfm_state["busy"] = "Waiting for you to click Yes, allow access on last.fm…"
+                    name = self.core.lastfm.finish_connect(token)
+                    lfm_state["busy"] = None
+                    baseline[str(v_lfm)] = True
+                    self.ui.put(lambda: (v_lfm.set(True), w.winfo_exists() and messagebox.showinfo(
+                        "Last.fm", f"Connected as {name}. The records you play will now be scrobbled.", parent=w)))
+                except Exception as e:
+                    lfm_state["busy"] = None
+                    msg = str(e)
+                    self.ui.put(lambda: w.winfo_exists() and messagebox.showerror(
+                        "Last.fm", f"Couldn't connect to Last.fm:\n{msg}", parent=w))
+            threading.Thread(target=work, daemon=True, name="lastfm-connect").start()
+
+        def lfm_disconnect():
+            if messagebox.askyesno("Last.fm", "Disconnect Last.fm? Nothing you play will be scrobbled anymore.",
+                                   parent=w):
+                self.core.lastfm.disconnect()
+
+        lfm_shown = {"key": None}
+
+        def refresh_lastfm():
+            if not w.winfo_exists():
+                return
+            if lastfm.available():
+                user = self.core.config.get("lastfm_user") if self.core.lastfm.connected() else ""
+                if lfm_state["busy"]:
+                    lfm_status.config(text=lfm_state["busy"], fg=WARN)
+                elif user:
+                    lfm_status.config(text=f"● Connected as {user}", fg=GOOD)
+                else:
+                    lfm_status.config(text="Not connected", fg=MUTED)
+                key = (bool(user), bool(lfm_state["busy"]))
+                if key != lfm_shown["key"]:  # rebuild the buttons only when the situation changes
+                    lfm_shown["key"] = key
+                    for child in lfm_buttons.winfo_children():
+                        child.destroy()
+                    if user:
+                        self.link(lfm_buttons, "Open my Last.fm profile ↗", f"https://www.last.fm/user/{user}",
+                                  bg=BG).pack(side="left")
+                        self.btn(lfm_buttons, "Disconnect", lfm_disconnect, kind="ghost").pack(side="left",
+                                                                                              padx=px(14))
+                    elif not lfm_state["busy"]:
+                        self.btn(lfm_buttons, "Connect Last.fm", lfm_connect, kind="accent").pack(side="left")
+                waiting = self.core.lastfm.pending()
+                extra = []
+                if waiting:
+                    extra.append(f"{waiting} scrobble{'s' if waiting != 1 else ''} waiting to be sent.")
+                if self.core.lastfm.last_error:
+                    extra.append(self.core.lastfm.last_error)
+                lfm_extra.config(text=" ".join(extra))
+            w.after(800, refresh_lastfm)
+        refresh_lastfm()
+
         # What the settings were when the window opened (or last saved), to spot unsaved changes
         watched = [v_client, v_card, v_card_text, v_status, v_button, v_asset, v_user, v_token, v_auto, v_flip,
-                   v_share, v_hook, v_tray, v_startup, v_bot, v_bot_token]
+                   v_share, v_hook, v_tray, v_startup, v_bot, v_bot_token, v_lfm]
         baseline = {str(v): v.get() for v in watched}
 
         def close_settings():
@@ -1177,6 +1273,7 @@ class VinylApp:
                 "discogs_username": v_user.get().strip(),
                 "share_enabled": v_share.get(), "share_webhook": hook_url, "close_to_tray": v_tray.get(),
                 "bot_enabled": v_bot.get(), "bot_token": v_bot_token.get().strip(),
+                "lastfm_enabled": v_lfm.get(),
             })
             if v_startup.get() != tray.startup_enabled():
                 try:

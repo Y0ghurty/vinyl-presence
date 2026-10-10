@@ -25,6 +25,15 @@ jobs:
         shell: bash
         run: printf 'VERSION = "%s"\nGITHUB_REPO = "%s"\n' "${GITHUB_REF_NAME#v}" "$GITHUB_REPOSITORY" > version.py
 
+      - name: Last.fm keys
+        # From the repository's secrets (Settings > Secrets and variables > Actions), so they're never in the code.
+        # Without them the app still builds; Last.fm scrobbling is just unavailable.
+        shell: bash
+        env:
+          LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
+          LASTFM_SHARED_SECRET: ${{ secrets.LASTFM_SHARED_SECRET }}
+        run: printf 'API_KEY = "%s"\nSHARED_SECRET = "%s"\n' "$LASTFM_API_KEY" "$LASTFM_SHARED_SECRET" > lastfm_keys.py
+
       - name: Build exe
         run: pyinstaller --noconfirm --onefile --windowed --name VinylPresence --icon assets/vinyl.png --add-data "assets;assets" --hidden-import pystray._win32 app.py
 
