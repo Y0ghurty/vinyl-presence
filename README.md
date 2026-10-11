@@ -64,7 +64,8 @@ downloads and installs it, and the app restarts by itself. If a record is playin
 - Start typing to search. **Enter** plays the selected record right away, **Esc** clears.
   *Surprise me* picks a random record.
 - **Click a record** (or browse with **↑ ↓**) to see its cover, details and tracklist on the right without
-  playing it. Start it with **▶ Side A**, **B**, …, or double-click a track to play from there.
+  playing it. **Double-click** it to play from side A, track 1, or start it with **▶ Side A**, **B**, … or
+  a double-click on any track.
   **← Now playing** brings the panel back to the record that's on.
 - It starts at side A. Click **B**, **C**, and so on when you put on another side, or double-click any
   track if you dropped the needle somewhere else.

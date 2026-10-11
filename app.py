@@ -296,7 +296,7 @@ class VinylApp:
         tf = tk.Frame(lp, bg=PANEL)
         tf.pack(fill="both", expand=True)
         self.list_frame = tk.Frame(tf, bg=PANEL)
-        self.grid_view = CoverGrid(tf, self, on_open=self.show_details)
+        self.grid_view = CoverGrid(tf, self, on_open=self.show_details, on_play=self.play)
         cols = (("artist", "ARTIST", 200), ("title", "TITLE", 260), ("year", "YEAR", 56), ("format", "FORMAT", 150))
         self.tree = ttk.Treeview(self.list_frame, columns=[c[0] for c in cols], show="headings", selectmode="browse")
         for key, label, width in cols:
@@ -324,7 +324,7 @@ class VinylApp:
 
         ft = tk.Frame(lp, bg=PANEL)
         ft.pack(fill="x", pady=(px(8), 0))
-        tk.Label(ft, text="Click: details     Enter: play     ↑ ↓: browse     Esc: clear", bg=PANEL, fg=FAINT,
+        tk.Label(ft, text="Click: details     Double-click or Enter: play     ↑ ↓: browse     Esc: clear", bg=PANEL, fg=FAINT,
                  font=(FONT, 9)).pack(side="left")
         self.meta_lbl = tk.Label(ft, bg=PANEL, fg=FAINT, font=(FONT, 9))
         self.meta_lbl.pack(side="right")
@@ -386,7 +386,7 @@ class VinylApp:
         self.entry.bind("<Prior>", lambda e: self.move_selection(-10))
         self.entry.bind("<Return>", lambda e: self.play_selected())
         self.tree.bind("<ButtonRelease-1>", self._on_tree_click)
-        self.tree.bind("<Double-1>", self._on_tree_click)
+        self.tree.bind("<Double-1>", self._on_tree_double)
         self.tree.bind("<Return>", lambda e: self.play_selected())
         self.tree.bind("<Key>", self._type_into_search)
         self.tracks.bind("<Double-1>", lambda e: self.play_track_row(self.tracks.identify_row(e.y)))
@@ -493,6 +493,11 @@ class VinylApp:
             if sel:
                 self.show_details(int(sel[0]))
 
+    def _on_tree_double(self, e):
+        """Double-click plays the record from the start: side A, first track."""
+        if self.tree.identify_region(e.x, e.y) == "cell":
+            self.play_selected()
+
     def _type_into_search(self, e):
         if e.char and e.char.isprintable() and not (e.state & 0x4):
             self.entry.focus_set()
@@ -574,7 +579,7 @@ class VinylApp:
             self.preview_job = self.root.after(delay, lambda: self.show_details(rid))
             return
         snap = self.core.player.snapshot()
-        if snap and snap["record"]["id"] == rid:
+        if (snap and snap["record"]["id"] == rid) or self.loading == rid:
             return self.close_details()  # that's the record on the platter: show its live tracklist
         rec = self.core.records.get(str(rid))
         if not rec:
