@@ -11,6 +11,7 @@ import json
 import re
 import threading
 import time
+from typing import Optional
 
 try:
     import discord
@@ -23,8 +24,8 @@ from metadata import _get_json, clean_name
 POST_AFTER_SECONDS = 30
 REPOST_AFTER_SECONDS = 3 * 3600
 ACCENT = 0xEF7A3C
-# View Channel + Send Messages + Embed Links
-INVITE_PERMISSIONS = 1024 + 2048 + 16384
+# View Channel + Send Messages + Embed Links + Manage Roles (for /nowspinning role)
+INVITE_PERMISSIONS = 1024 + 2048 + 16384 + 268435456
 DISCOGS_RELEASE = re.compile(r"discogs\.com/release/(\d+)")
 MEDIUM = re.compile(r"^on (vinyl|CD|cassette|shellac)$")
 
@@ -113,6 +114,7 @@ class NowSpinningBot(discord.Client if discord else object):
         self.tree = app_commands.CommandTree(self)
         self.pending = {}  # (guild id, member id) -> (record key, task)
         self.last_seen = {}  # (guild id, member id) -> what we last logged, so the log isn't flooded
+        self.role_busy = set()  # (guild id, member id) while the role is being given
         self._add_commands()
 
     def _add_commands(self):
@@ -134,6 +136,7 @@ class NowSpinningBot(discord.Client if discord else object):
             member = interaction.guild.get_member(interaction.user.id)
             if member:
                 self._consider(member, "just opted in")  # a record that's already playing counts too
+                self._give_role_soon(member)
 
         @group.command(name="status", description="What the bot can see of your Vinyl Presence right now")
         async def status(interaction: discord.Interaction):
@@ -163,6 +166,29 @@ class NowSpinningBot(discord.Client if discord else object):
                 "Now-spinning records will be posted in this channel. Members join in with /nowspinning on.",
                 ephemeral=True)
 
+        @group.command(name="role", description="Admins: give a role to everyone who uses Vinyl Presence")
+        @app_commands.describe(role="The role to give (leave empty to stop giving one)")
+        @app_commands.default_permissions(manage_guild=True)
+        async def set_role(interaction: discord.Interaction, role: Optional[discord.Role] = None):
+            if await self._not_in_server(interaction):
+                return
+            g = self.store.guild(interaction.guild_id)
+            g["role"] = role.id if role else None
+            self.store.save()
+            if not role:
+                await interaction.response.send_message("OK, I won't give anyone a role anymore.", ephemeral=True)
+                return
+            problems = self._role_problems(interaction.guild, role)
+            text = f"Everyone who uses Vinyl Presence will get {role.mention}."
+            if problems:
+                text += " But first: " + "; ".join(problems) + ". Then run this command again."
+            else:
+                text += " I'm giving it now to everyone I see playing a record, and to others as soon as they do."
+            await interaction.response.send_message(text, ephemeral=True)
+            if not problems:
+                for member in interaction.guild.members:
+                    self._maybe_give_role(member)
+
         self.tree.add_command(group)
 
     async def setup_hook(self):
@@ -176,6 +202,8 @@ class NowSpinningBot(discord.Client if discord else object):
         for guild in self.guilds:
             await self._sync_guild(guild)
             self._consider_all(guild, "already playing when the bot started")
+            for member in guild.members:
+                self._maybe_give_role(member)
 
     async def on_guild_join(self, guild):
         print(f"[bot] joined {guild.name}")
@@ -206,6 +234,9 @@ class NowSpinningBot(discord.Client if discord else object):
                  else "Channel: not set yet. An admin types /nowspinning channel in the channel to use."]
         opted_in = interaction.user.id in g["members"]
         lines.append("You: opted in ✅" if opted_in else "You: not opted in. Type /nowspinning on to join.")
+        if g.get("role") and member:
+            has = any(r.id == g["role"] for r in member.roles)
+            lines.append(f"Role <@&{g['role']}>: {'you have it ✅' if has else 'you get it as soon as I see you playing a record'}")
         activities = member.activities if member else ()
         act = vinyl_activity(activities)
         if act:
@@ -238,7 +269,52 @@ class NowSpinningBot(discord.Client if discord else object):
             print(f"[bot] couldn't add commands to {guild.name}: {e}")
 
     async def on_presence_update(self, before, after):
+        self._maybe_give_role(after)
         self._consider(after, "status changed")
+
+    # -- the "uses Vinyl Presence" role
+
+    @staticmethod
+    def _role_problems(guild, role):
+        me = guild.me
+        problems = []
+        if role.managed or role.is_default():
+            problems.append(f"{role.name} can't be given out; pick a normal role")
+        if not me.guild_permissions.manage_roles:
+            problems.append("I need the Manage Roles permission (Server Settings → Roles → my role)")
+        if role >= me.top_role:
+            problems.append(f"my own role has to be above {role.name} in Server Settings → Roles (drag it higher)")
+        return problems
+
+    def _maybe_give_role(self, member):
+        """Give the role when the member's status shows Vinyl Presence."""
+        if vinyl_activity(getattr(member, "activities", ())):
+            self._give_role_soon(member)
+
+    def _give_role_soon(self, member):
+        g = self.store.guilds.get(str(member.guild.id)) or {}
+        role_id = g.get("role")
+        key = (member.guild.id, member.id)
+        if not role_id or key in self.role_busy or any(r.id == role_id for r in member.roles):
+            return
+        self.role_busy.add(key)
+        asyncio.create_task(self._give_role(member, role_id, key))
+
+    async def _give_role(self, member, role_id, key):
+        try:
+            role = member.guild.get_role(role_id)
+            if role is None:
+                print("[bot] the Vinyl Presence role was deleted; pick one again with /nowspinning role")
+                return
+            await member.add_roles(role, reason="Uses Vinyl Presence")
+            print(f"[bot] gave {member.display_name} the {role.name} role")
+        except discord.Forbidden:
+            print("[bot] couldn't give the role: the bot needs Manage Roles, and its own role must be above that "
+                  "role in Server Settings → Roles")
+        except discord.HTTPException as e:
+            print(f"[bot] couldn't give the role: {e}")
+        finally:
+            self.role_busy.discard(key)
 
     def _log_once(self, member, text):
         slot = (member.guild.id, member.id)

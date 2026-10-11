@@ -115,6 +115,9 @@ Members only type `/nowspinning on` in your server; they never see a secret.
    not the bot itself, so the bot couldn't see anyone's status or post.
 5. In your now-spinning channel, type `/nowspinning channel`. Members join with `/nowspinning on` and
    leave with `/nowspinning off`.
+6. Optional: `/nowspinning role` (pick a role, e.g. *Vinyl Presence User*) gives that role to everyone the
+   bot sees using Vinyl Presence, and to anyone who types `/nowspinning on`. The bot needs **Manage
+   Roles**, and its own role must be *above* that role in *Server Settings → Roles*.
 
 A record is posted once it has played for 30 seconds, under the member's name and avatar, with the cover
 and a Discogs link. The bot only runs while your Vinyl Presence is open (it can live in the tray and start

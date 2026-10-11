@@ -1071,6 +1071,8 @@ class VinylApp:
             "4.  Click Invite the bot (appears below once it's online) and add it to your server. Use this link, "
             "not the Developer Portal's install link: that one only adds the commands, not the bot.",
             "5.  In your now-spinning channel, type /nowspinning channel. Members type /nowspinning on.",
+            "6.  Optional: /nowspinning role gives everyone who uses Vinyl Presence a role. The bot needs Manage "
+            "Roles, and its own role must be above that role in Server Settings → Roles.",
             "Tip: if you also had Post what I play on (Sharing & tray) for that channel, turn it off and type "
             "/nowspinning on yourself, so your records aren't posted twice.",
         ]
