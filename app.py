@@ -26,7 +26,7 @@ import share
 import tray
 import updater
 from core import ASSETS, DATA, ROOT, Core, search
-from covers import CoverGrid
+from covers import CoverGrid, ThumbCache
 from metadata import USER_AGENT
 from stats_view import StatsWindow
 from theme import ACCENT, ACCENT_DIM, ACCENT_HI, BAD, BG, FAINT, FONT, GOOD, LINE, MUTED, PANEL, PANEL2, ROW_ALT, TEXT, WARN
@@ -97,6 +97,9 @@ class VinylApp:
         self.tray = None
         self.items = []
         self.meta_version = -1
+        self.preview_rid = None  # record whose details are shown on the right (None = what's playing)
+        self.preview_loading = None
+        self.preview_job = None
         self.collection_version = core.collection_version
         self.ticks = 0
 
@@ -293,7 +296,7 @@ class VinylApp:
         tf = tk.Frame(lp, bg=PANEL)
         tf.pack(fill="both", expand=True)
         self.list_frame = tk.Frame(tf, bg=PANEL)
-        self.grid_view = CoverGrid(tf, self, on_play=self.play)
+        self.grid_view = CoverGrid(tf, self, on_open=self.show_details)
         cols = (("artist", "ARTIST", 200), ("title", "TITLE", 260), ("year", "YEAR", 56), ("format", "FORMAT", 150))
         self.tree = ttk.Treeview(self.list_frame, columns=[c[0] for c in cols], show="headings", selectmode="browse")
         for key, label, width in cols:
@@ -321,7 +324,7 @@ class VinylApp:
 
         ft = tk.Frame(lp, bg=PANEL)
         ft.pack(fill="x", pady=(px(8), 0))
-        tk.Label(ft, text="Enter or double-click: play     ↑ ↓: choose     Esc: clear", bg=PANEL, fg=FAINT,
+        tk.Label(ft, text="Click: details     Enter: play     ↑ ↓: browse     Esc: clear", bg=PANEL, fg=FAINT,
                  font=(FONT, 9)).pack(side="left")
         self.meta_lbl = tk.Label(ft, bg=PANEL, fg=FAINT, font=(FONT, 9))
         self.meta_lbl.pack(side="right")
@@ -330,9 +333,34 @@ class VinylApp:
         right.grid(row=0, column=1, sticky="nsew")
         rp = tk.Frame(right, bg=PANEL)
         rp.pack(fill="both", expand=True, padx=px(16), pady=px(14))
-        tk.Label(rp, text="TRACKLIST", bg=PANEL, fg=FAINT, font=(FONT, 9, "bold"), anchor="w").pack(fill="x")
+        head = tk.Frame(rp, bg=PANEL)
+        head.pack(fill="x")
+        self.tl_title = tk.Label(head, text="TRACKLIST", bg=PANEL, fg=FAINT, font=(FONT, 9, "bold"), anchor="w")
+        self.tl_title.pack(side="left")
+        self.back_link = tk.Label(head, text="← Now playing", bg=PANEL, fg=ACCENT, cursor="hand2", font=(FONT, 9))
+        self.back_link.bind("<Button-1>", lambda e: self.close_details())
+        # details of a record you clicked (shown instead of the playing record's tracklist)
+        self.detail = tk.Frame(rp, bg=PANEL)
+        self.detail_thumbs = ThumbCache(self, px(84))
+        self.detail_cover = tk.Label(self.detail, bg=PANEL, bd=0)
+        self.detail_cover.grid(row=0, column=0, rowspan=3, sticky="nw", padx=(0, px(12)))
+        self.detail.columnconfigure(1, weight=1)
+        self.detail_title = tk.Label(self.detail, bg=PANEL, fg=TEXT, font=(FONT, 12, "bold"), anchor="w",
+                                     justify="left", wraplength=px(200))
+        self.detail_title.grid(row=0, column=1, sticky="ew")
+        self.detail_artist = tk.Label(self.detail, bg=PANEL, fg=MUTED, font=(FONT, 10), anchor="w", justify="left",
+                                      wraplength=px(200))
+        self.detail_artist.grid(row=1, column=1, sticky="ew")
+        self.detail_meta = tk.Label(self.detail, bg=PANEL, fg=FAINT, font=(FONT, 9), anchor="nw", justify="left",
+                                    wraplength=px(200))
+        self.detail_meta.grid(row=2, column=1, sticky="new")
+        self.detail_btns = tk.Frame(self.detail, bg=PANEL)
+        self.detail_btns.grid(row=3, column=0, columnspan=2, sticky="w", pady=(px(10), 0))
+        self.detail.bind("<Configure>", lambda e: [w.config(wraplength=max(px(80), e.width - px(100)))
+                                                   for w in (self.detail_title, self.detail_artist, self.detail_meta)])
         tl = tk.Frame(rp, bg=PANEL)
         tl.pack(fill="both", expand=True, pady=(px(6), 0))
+        self.tl_frame = tl
         self.tracks = ttk.Treeview(tl, columns=("pos", "title", "dur"), show="", selectmode="browse")
         self.tracks.column("pos", width=px(40), stretch=False)
         self.tracks.column("title", width=px(200))
@@ -345,7 +373,7 @@ class VinylApp:
         self.tracks.pack(side="left", fill="both", expand=True)
         tsb.pack(side="right", fill="y")
         self.tracks_msg = tk.Label(tl, bg=PANEL, fg=FAINT, font=(FONT, 10), justify="center")
-        tk.Label(rp, text="Double-click a track or side to jump there", bg=PANEL, fg=FAINT,
+        tk.Label(rp, text="Double-click a track or side to play from there", bg=PANEL, fg=FAINT,
                  font=(FONT, 9), anchor="w").pack(fill="x", pady=(px(8), 0))
 
         # behaviour
@@ -357,14 +385,15 @@ class VinylApp:
         self.entry.bind("<Next>", lambda e: self.move_selection(10))
         self.entry.bind("<Prior>", lambda e: self.move_selection(-10))
         self.entry.bind("<Return>", lambda e: self.play_selected())
-        self.tree.bind("<Double-1>", self._on_tree_double)
+        self.tree.bind("<ButtonRelease-1>", self._on_tree_click)
+        self.tree.bind("<Double-1>", self._on_tree_click)
         self.tree.bind("<Return>", lambda e: self.play_selected())
         self.tree.bind("<Key>", self._type_into_search)
         self.tracks.bind("<Double-1>", lambda e: self.play_track_row(self.tracks.identify_row(e.y)))
         self.tracks.bind("<Return>", lambda e: self.play_track_row(self.tracks.focus()))
         self.sort.bind("<<ComboboxSelected>>", self._on_sort)
         root.bind("<Control-f>", lambda e: (self.entry.focus_set(), self.entry.select_range(0, "end")))
-        root.bind("<Escape>", lambda e: (self.q.set(""), self.entry.focus_set()))
+        root.bind("<Escape>", lambda e: (self.q.set(""), self.close_details(), self.entry.focus_set()))
 
     # ------------------------------------------------------------ record list
 
@@ -443,19 +472,26 @@ class VinylApp:
     def move_selection(self, delta):
         if self.view == "covers":
             self.grid_view.move(delta if abs(delta) == 1 else (3 if delta > 0 else -3))
-            return "break"
-        items = self.tree.get_children()
-        if items:
-            sel = self.tree.selection()
-            i = items.index(sel[0]) + delta if sel else (0 if delta > 0 else len(items) - 1)
-            i = max(0, min(len(items) - 1, i))
-            self.tree.selection_set(items[i])
-            self.tree.see(items[i])
+            rid = self.grid_view.selected_id()
+        else:
+            items = self.tree.get_children()
+            rid = None
+            if items:
+                sel = self.tree.selection()
+                i = items.index(sel[0]) + delta if sel else (0 if delta > 0 else len(items) - 1)
+                i = max(0, min(len(items) - 1, i))
+                self.tree.selection_set(items[i])
+                self.tree.see(items[i])
+                rid = int(items[i])
+        if rid is not None:
+            self.show_details(rid, delay=250)  # browsing with the arrows: details follow (after a moment)
         return "break"
 
-    def _on_tree_double(self, e):
+    def _on_tree_click(self, e):
         if self.tree.identify_region(e.x, e.y) == "cell":
-            self.play_selected()
+            sel = self.tree.selection()
+            if sel:
+                self.show_details(int(sel[0]))
 
     def _type_into_search(self, e):
         if e.char and e.char.isprintable() and not (e.state & 0x4):
@@ -478,6 +514,7 @@ class VinylApp:
             self.tree.selection_set(str(pick))
             self.tree.see(str(pick))
         self.entry.focus_set()
+        self.show_details(pick)
         self.count_lbl.config(text="How about this one? Press Enter to play it.")
 
     def play_selected(self):
@@ -503,6 +540,7 @@ class VinylApp:
         threading.Thread(target=work, daemon=True).start()
 
     def play(self, rid, side=None, track=None):
+        self.close_details(render=False)
         snap = self.core.player.snapshot()
         if not snap or snap["record"]["id"] != rid:
             self.loading = rid
@@ -519,10 +557,137 @@ class VinylApp:
 
     def play_track_row(self, iid):
         snap = self.core.player.snapshot()
-        if not snap or not iid:
+        rid = self.preview_rid if self.preview_rid is not None else (snap["record"]["id"] if snap else None)
+        if rid is None or not iid:
             return
         kind, side, *rest = iid.split("|")
-        self.play(snap["record"]["id"], side, int(rest[0]) if kind == "t" else None)
+        self.play(rid, side, int(rest[0]) if kind == "t" else None)
+
+    # ------------------------------------------------------------ record details (without playing)
+
+    def show_details(self, rid, delay=0):
+        """Show a record's cover, info and tracklist on the right. Nothing starts playing."""
+        if self.preview_job:
+            self.root.after_cancel(self.preview_job)
+            self.preview_job = None
+        if delay:
+            self.preview_job = self.root.after(delay, lambda: self.show_details(rid))
+            return
+        snap = self.core.player.snapshot()
+        if snap and snap["record"]["id"] == rid:
+            return self.close_details()  # that's the record on the platter: show its live tracklist
+        rec = self.core.records.get(str(rid))
+        if not rec:
+            return
+        self.preview_rid = rid
+        info = self.core.library.get_cached(rid) or {}
+        if not info.get("tracks"):
+            self.preview_loading = rid
+
+            def work():
+                self.core.library.get(rec)  # looks it up (Discogs + track lengths) if it hasn't been yet
+                self.ui.put(lambda: self._details_loaded(rid))
+            threading.Thread(target=work, daemon=True, name="details").start()
+        self.render_tracklist()
+
+    def _details_loaded(self, rid):
+        if self.preview_loading == rid:
+            self.preview_loading = None
+        if self.preview_rid == rid:
+            self.render_tracklist()
+
+    def close_details(self, render=True):
+        if self.preview_job:
+            self.root.after_cancel(self.preview_job)
+            self.preview_job = None
+        if self.preview_rid is not None:
+            self.preview_rid = None
+            if render:
+                self.render_tracklist()
+
+    def _detail_cover_ready(self, rid):
+        if rid == self.preview_rid:
+            self.detail_cover.config(image=self.detail_thumbs.images[rid])
+
+    def render_tracklist(self):
+        """The right-hand panel: the clicked record's details, or the tracklist of what's playing."""
+        snap = self.core.player.snapshot()
+        self.tracks.delete(*self.tracks.get_children())
+        self.tracks_msg.place_forget()
+        for w in self.detail_btns.winfo_children():
+            w.destroy()
+        rid = self.preview_rid
+        rec = self.core.records.get(str(rid)) if rid is not None else None
+        if rec is None:
+            self.preview_rid = None
+            self.tl_title.config(text="TRACKLIST")
+            self.back_link.pack_forget()
+            self.detail.pack_forget()
+            if self.loading and not (snap and snap["record"]["id"] == self.loading):
+                return self._tracks_message("Looking up the tracklist…")
+            if not snap:
+                return self._tracks_message("Click a record to see its tracks,\nor press Enter to play it.")
+            info = self.core.library.get_cached(snap["record"]["id"]) or {}
+            if not info.get("tracks"):
+                return self._tracks_message("No tracklist found for this release.\nThe status still shows the album.")
+            self._fill_tracks(info["tracks"], snap["side"], snap["idx"], snap["side_done"])
+            return
+
+        # details of the clicked record
+        self.tl_title.config(text="RECORD DETAILS")
+        if snap:
+            self.back_link.pack(side="right")
+        else:
+            self.back_link.pack_forget()
+        self.detail.pack(fill="x", pady=(self.px(10), self.px(4)), before=self.tl_frame)
+        img = self.detail_thumbs.get(rid, self._detail_cover_ready) or self.detail_thumbs.placeholder
+        self.detail_cover.config(image=img or "")
+        self.detail_title.config(text=rec["title"])
+        self.detail_artist.config(text=rec["artist"])
+        self.detail_meta.config(text=" · ".join(x for x in (rec["year"], rec["label"], short_format(rec["format"]))
+                                                 if x))
+        info = self.core.library.get_cached(rid) or {}
+        tracks = info.get("tracks") or []
+        sides = list(dict.fromkeys(t["side"] for t in tracks))
+        if len(sides) > 1:
+            for i, side in enumerate(sides):
+                self.btn(self.detail_btns, f"▶  {side_name(side)}" if i == 0 else side,
+                         lambda side=side: self.play(rid, side), kind="accent" if i == 0 else "normal"
+                         ).pack(side="left", padx=(0, self.px(4)))
+        else:
+            self.btn(self.detail_btns, "▶  Play", lambda: self.play(rid), kind="accent").pack(side="left")
+        if tracks:
+            self._fill_tracks(tracks)
+        elif self.preview_loading == rid:
+            self._tracks_message("Looking up the tracklist…")
+        else:
+            self._tracks_message("No tracklist found for this release.\nYou can still play it as a whole album.")
+
+    def _fill_tracks(self, all_tracks, side=None, idx=None, side_done=False):
+        """Tracks grouped per side; the playing side shows what's done and what's on."""
+        last_side = None
+        side_counter = {}
+        for t in all_tracks:
+            s = t["side"]
+            n = side_counter.get(s, 0)
+            side_counter[s] = n + 1
+            if s != last_side:
+                same_side = [x for x in all_tracks if x["side"] == s]
+                total = sum(x["duration"] or 0 for x in same_side)
+                exact = all(x["duration"] for x in same_side)
+                self.tracks.insert("", "end", iid=f"s|{s}", tags=("side",),
+                                   values=("", side_name(s).upper(), fmt_time(total) if exact else ""))
+                last_side = s
+            tags = ()
+            if s == side and not side_done and idx is not None:
+                tags = ("current",) if n == idx else (("done",) if n < idx else ())
+            elif s == side and side_done:
+                tags = ("done",)
+            self.tracks.insert("", "end", iid=f"t|{s}|{n}", tags=tags,
+                               values=(t["pos"], t["title"], fmt_time(t["duration"]) if t["duration"] else ""))
+        cur = f"t|{side}|{idx}" if idx is not None else (f"s|{side}" if side else None)
+        if cur and self.tracks.exists(cur):
+            self.tracks.see(cur)
 
     # ------------------------------------------------------------ refresh loop
 
@@ -570,7 +735,6 @@ class VinylApp:
     def render_now(self, snap):
         for w in self.sides_frame.winfo_children():
             w.destroy()
-        self.tracks.delete(*self.tracks.get_children())
         if self.loading and not (snap and snap["record"]["id"] == self.loading):
             rec = self.core.records.get(str(self.loading)) or {}
             self.eyebrow.config(text="DROPPING THE NEEDLE…")
@@ -578,7 +742,7 @@ class VinylApp:
             self.sub_lbl.config(text=rec.get("artist", ""))
             self.show_cover(None)
             self._controls(False)
-            self._tracks_message("Looking up the tracklist…")
+            self.render_tracklist()
             return
         if not snap:
             self._set_playing_row(None)
@@ -587,7 +751,7 @@ class VinylApp:
             self.sub_lbl.config(text="Type a few letters below and press Enter. Your Discord status follows.")
             self.show_cover(None)
             self._controls(False)
-            self._tracks_message("The tracklist shows up here\nonce a record is playing.")
+            self.render_tracklist()
             return
 
         rec, side, idx = snap["record"], snap["side"], snap["idx"]
@@ -628,35 +792,7 @@ class VinylApp:
                 b.pack(side="left", padx=(0, self.px(4)))
         self._controls(True, idx is not None, nudge=not snap["side_done"])
 
-        # full tracklist, grouped per side
-        self.tracks_msg.place_forget()
-        info = self.core.library.get_cached(rec["id"]) or {}
-        all_tracks = info.get("tracks") or []
-        if not all_tracks:
-            self._tracks_message("No tracklist found for this release.\nThe status still shows the album.")
-        last_side = None
-        side_counter = {}
-        for t in all_tracks:
-            s = t["side"]
-            n = side_counter.get(s, 0)
-            side_counter[s] = n + 1
-            if s != last_side:
-                same_side = [x for x in all_tracks if x["side"] == s]
-                total = sum(x["duration"] or 0 for x in same_side)
-                exact = all(x["duration"] for x in same_side)
-                self.tracks.insert("", "end", iid=f"s|{s}", tags=("side",),
-                                   values=("", side_name(s).upper(), fmt_time(total) if exact else ""))
-                last_side = s
-            tags = ()
-            if s == side and not snap["side_done"] and idx is not None:
-                tags = ("current",) if n == idx else (("done",) if n < idx else ())
-            elif s == side and snap["side_done"]:
-                tags = ("done",)
-            self.tracks.insert("", "end", iid=f"t|{s}|{n}", tags=tags,
-                               values=(t["pos"], t["title"], fmt_time(t["duration"]) if t["duration"] else ""))
-        cur = f"t|{side}|{idx}" if idx is not None else f"s|{side}"
-        if self.tracks.exists(cur):
-            self.tracks.see(cur)
+        self.render_tracklist()
 
     def _controls(self, show, track_mode=False, nudge=False):
         for w in (self.prev_btn, self.next_btn):

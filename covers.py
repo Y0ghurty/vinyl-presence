@@ -104,9 +104,9 @@ class ThumbCache:
 class CoverGrid(tk.Frame):
     GAP = 14
 
-    def __init__(self, parent, app, on_play):
+    def __init__(self, parent, app, on_open):
         super().__init__(parent, bg=PANEL)
-        self.app, self.on_play = app, on_play
+        self.app, self.on_open = app, on_open  # on_open(record id): show the record's details
         self.tile = app.px(128)
         self.text_h = app.px(40)
         self.thumbs = ThumbCache(app, self.tile)
@@ -266,12 +266,10 @@ class CoverGrid(tk.Frame):
         i = self._index_at(e)
         if i >= 0:
             self._select(i)
+            self.on_open(self.items[i]["id"])
 
     def _double(self, e):
-        i = self._index_at(e)
-        if i >= 0:
-            self._select(i)
-            self.on_play(self.items[i]["id"])
+        self._click(e)
 
     def _wheel(self, e):
         self.canvas.yview_scroll(int(-e.delta / 120) * 3, "units")
