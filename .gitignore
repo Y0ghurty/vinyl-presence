@@ -12,3 +12,6 @@ dist/
 
 # Last.fm API key and secret (filled in locally; the release build gets them from GitHub secrets)
 lastfm_keys.py
+
+# YouTube Data API key (filled in locally; the release build gets it from a GitHub secret)
+youtube_keys.py

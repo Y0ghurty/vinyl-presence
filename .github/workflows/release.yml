@@ -19,7 +19,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install build tools
-        run: python -m pip install pyinstaller pillow pystray discord.py
+        run: python -m pip install pyinstaller pillow pystray discord.py pychromecast
 
       - name: Stamp version
         shell: bash
@@ -33,6 +33,13 @@ jobs:
           LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
           LASTFM_SHARED_SECRET: ${{ secrets.LASTFM_SHARED_SECRET }}
         run: printf 'API_KEY = "%s"\nSHARED_SECRET = "%s"\n' "$LASTFM_API_KEY" "$LASTFM_SHARED_SECRET" > lastfm_keys.py
+
+      - name: YouTube key
+        # From the YOUTUBE_API_KEY repository secret. Without it, only the videos Discogs lists are used.
+        shell: bash
+        env:
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+        run: printf 'API_KEY = "%s"\n' "$YOUTUBE_API_KEY" > youtube_keys.py
 
       - name: Build exe
         run: pyinstaller --noconfirm --onefile --windowed --name VinylPresence --icon assets/vinyl.png --add-data "assets;assets" --hidden-import pystray._win32 app.py

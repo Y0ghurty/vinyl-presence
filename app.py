@@ -24,6 +24,8 @@ import lastfm
 import server_bot
 import share
 import tray
+import tv
+import videos
 import updater
 from core import ASSETS, DATA, ROOT, Core, search
 from covers import CoverGrid, ThumbCache
@@ -93,6 +95,8 @@ class VinylApp:
         self.tray = None
         self.items = []
         self.meta_version = -1
+        self.tv_active = False  # a video was started on the TV from this app
+        self.tv_key = None  # (record, side, track) the TV shows
         self.preview_rid = None  # record whose details are shown on the right (None = what's playing)
         self.preview_loading = None
         self.preview_job = None
@@ -234,17 +238,25 @@ class VinylApp:
         ctl.columnconfigure(1, weight=1)
         self.sides_frame = tk.Frame(ctl, bg=PANEL)
         self.sides_frame.grid(row=0, column=0, sticky="w")
+        # music video of what's playing, on the Chromecast
+        self.tv_btn = self.btn(ctl, "▶  Watch on TV", lambda: self.tv_watch(), kind="ghost", size=9)
+        self.tv_btn.grid(row=0, column=2, padx=(0, px(10)))
         # nudge the timer when play was clicked a bit before/after the needle dropped
         self.back_btn = self.btn(ctl, "−10s", lambda: self.core.player.nudge(-10), kind="ghost", size=9)
-        self.back_btn.grid(row=0, column=2, padx=(0, px(2)))
+        self.back_btn.grid(row=0, column=3, padx=(0, px(2)))
         self.fwd_btn = self.btn(ctl, "+10s", lambda: self.core.player.nudge(10), kind="ghost", size=9)
-        self.fwd_btn.grid(row=0, column=3, padx=(0, px(14)))
+        self.fwd_btn.grid(row=0, column=4, padx=(0, px(14)))
         self.prev_btn = self.btn(ctl, "⏮", lambda: self.bg(self.core.player.control, "prev"), size=11)
-        self.prev_btn.grid(row=0, column=4, padx=(0, px(6)))
+        self.prev_btn.grid(row=0, column=5, padx=(0, px(6)))
         self.next_btn = self.btn(ctl, "⏭", lambda: self.bg(self.core.player.control, "next"), size=11)
-        self.next_btn.grid(row=0, column=5, padx=(0, px(6)))
+        self.next_btn.grid(row=0, column=6, padx=(0, px(6)))
         self.stop_btn = self.btn(ctl, "■  Stop", lambda: self.bg(self.core.player.control, "stop"))
-        self.stop_btn.grid(row=0, column=6)
+        self.stop_btn.grid(row=0, column=7)
+        self.tv_bar = tk.Frame(info, bg=PANEL)
+        self.tv_lbl = tk.Label(self.tv_bar, bg=PANEL, fg=MUTED, font=(FONT, 9), anchor="w")
+        self.tv_lbl.pack(side="left")
+        self.tv_links = tk.Frame(self.tv_bar, bg=PANEL)
+        self.tv_links.pack(side="left", padx=(px(10), 0))
 
         # body: records on the left, tracklist on the right
         body = tk.Frame(root, bg=BG)
@@ -565,6 +577,158 @@ class VinylApp:
         kind, side, *rest = iid.split("|")
         self.play(rid, side, int(rest[0]) if kind == "t" else None)
 
+    # ------------------------------------------------------------ music video on the TV
+
+    def _tv_now(self):
+        """(record, track or None) of what's playing, for finding its video."""
+        snap = self.core.player.snapshot()
+        if not snap:
+            return None, None, None
+        track = snap["tracks"][snap["idx"]] if snap["idx"] is not None else None
+        return snap["record"], track, (snap["record"]["id"], snap["side"], snap["idx"])
+
+    def tv_message(self, text, color=MUTED, links=()):
+        for w in self.tv_links.winfo_children():
+            w.destroy()
+        if not text:
+            self.tv_bar.grid_remove()
+            return
+        self.tv_lbl.config(text=text, fg=color)
+        for label, action in links:
+            link = tk.Label(self.tv_links, text=label, bg=PANEL, fg=ACCENT, cursor="hand2", font=(FONT, 9))
+            link.bind("<Button-1>", lambda e, action=action: action())
+            link.pack(side="left", padx=(0, self.px(12)))
+        self.tv_bar.grid(row=5, column=0, sticky="w", pady=(self.px(8), 0))
+
+    def tv_watch(self, choose=False, follow=False):
+        """Find the music video of what's playing and show it on the Chromecast."""
+        rec, track, key = self._tv_now()
+        if not rec:
+            return
+        device = self.core.config.get("tv_device", "")
+        if not device:
+            return self.pick_tv(then=lambda: self.tv_watch(choose))
+        self.tv_key = key
+        name = track["title"] if track else rec["title"]
+        self.tv_message(f"Looking for a video of {name}…")
+
+        def work():
+            try:
+                found = self.core.videos.candidates(rec, track)
+            except videos.VideoError as e:
+                msg, url = str(e), e.search_url
+                self.ui.put(lambda: self.tv_message(msg, WARN, [("Watch on YouTube ↗", lambda: webbrowser.open(url))]))
+                return
+            if not found:
+                url = videos.search_url(track.get("artist") or rec["artist"] if track else rec["artist"], name)
+                hint = "" if videos.youtube_available() else " on Discogs"
+                self.ui.put(lambda: self.tv_message(f"No video found{hint} for {name}.", MUTED,
+                                                    [("Search YouTube ↗", lambda: webbrowser.open(url))]))
+                return
+            if choose:
+                self.ui.put(lambda: self._choose_video(rec, track, found))
+            else:
+                self._tv_play(rec, track, found[0])
+        threading.Thread(target=work, daemon=True, name="tv-find").start()
+
+    def _tv_play(self, rec, track, video):
+        """Runs on a worker thread: starts the video and updates the TV line."""
+        device = self.core.config.get("tv_device", "")
+        self.ui.put(lambda: self.tv_message(f"Starting on {device}…"))
+        try:
+            self.core.tv.play(device, video, muted=self.core.config.get("tv_muted", True))
+        except Exception as e:
+            msg = str(e)
+            self.ui.put(lambda: self.tv_message(f"Couldn't play on {device}: {msg}", BAD,
+                                                [("Choose TV", lambda: self.pick_tv(then=self.tv_watch))]))
+            return
+        self.tv_active = True
+        title = video["title"] if len(video["title"]) <= 60 else video["title"][:59] + "…"
+        self.ui.put(lambda: self.tv_message(f"On {device}: {title}", MUTED, [
+            ("Other video", lambda: self.tv_watch(choose=True)),
+            ("Stop TV", self.tv_stop)]))
+
+    def tv_stop(self):
+        self.tv_active = False
+        self.tv_key = None
+        self.tv_message("")
+        self.bg(self.core.tv.stop)
+
+    def _choose_video(self, rec, track, found):
+        """Pick one of the best matches; the choice is remembered for this song."""
+        px = self.px
+        w = tk.Toplevel(self.root, bg=BG)
+        w.title("Choose the video")
+        w.transient(self.root)
+        w.resizable(False, False)
+        w.bind("<Escape>", lambda e: w.destroy())
+        dark_titlebar(w)
+        pad = tk.Frame(w, bg=BG)
+        pad.pack(fill="both", expand=True, padx=px(20), pady=px(16))
+        name = track["title"] if track else rec["title"]
+        tk.Label(pad, text=f"Videos for {name}", bg=BG, fg=TEXT, font=(FONT, 11, "bold"), anchor="w").pack(fill="x")
+
+        def pick(video):
+            w.destroy()
+            self.core.videos.choose(rec, track, video)
+            threading.Thread(target=self._tv_play, args=(rec, track, video), daemon=True).start()
+        for video in found:
+            source = "from Discogs" if video.get("source") == "discogs" else "from YouTube"
+            row = tk.Frame(pad, bg=BG)
+            row.pack(fill="x", pady=(px(8), 0))
+            self.btn(row, "▶  Play", lambda v=video: pick(v), size=9).pack(side="left")
+            tk.Label(row, text=f"{video['title']}  ·  {source}", bg=BG, fg=MUTED, font=(FONT, 9), anchor="w",
+                     wraplength=px(440), justify="left").pack(side="left", padx=(px(10), 0))
+        artist = (track or {}).get("artist") or rec["artist"]
+        self.link(pad, "None of these: search YouTube ↗", videos.search_url(artist, name), bg=BG).pack(
+            anchor="w", pady=(px(14), 0))
+        w.update_idletasks()
+        w.geometry(f"+{self.root.winfo_rootx() + px(160)}+{self.root.winfo_rooty() + px(120)}")
+        w.grab_set()
+
+    def pick_tv(self, then=None):
+        """Find the Chromecasts on the network and let the user choose one."""
+        px = self.px
+        w = tk.Toplevel(self.root, bg=BG)
+        w.title("Choose your TV")
+        w.transient(self.root)
+        w.resizable(False, False)
+        w.bind("<Escape>", lambda e: w.destroy())
+        dark_titlebar(w)
+        pad = tk.Frame(w, bg=BG)
+        pad.pack(fill="both", expand=True, padx=px(20), pady=px(16))
+        tk.Label(pad, text="Which Chromecast should show the videos?", bg=BG, fg=TEXT, font=(FONT, 11, "bold"),
+                 anchor="w").pack(fill="x")
+        body = tk.Frame(pad, bg=BG)
+        body.pack(fill="x", pady=(px(10), 0))
+        msg = tk.Label(body, text="Looking for Chromecasts on your Wi-Fi…", bg=BG, fg=MUTED, font=(FONT, 10))
+        msg.pack(anchor="w")
+
+        def choose(name):
+            self.core.update_config({"tv_device": name})
+            w.destroy()
+            if then:
+                then()
+
+        def show(names, error=None):
+            if not w.winfo_exists():
+                return
+            msg.config(text=error or ("" if names else "No Chromecast found. Is it on, and on the same Wi-Fi as this PC?"))
+            for name in names:
+                self.btn(body, name, lambda n=name: choose(n)).pack(fill="x", pady=(0, px(6)))
+
+        def work():
+            try:
+                names = self.core.tv.discover()
+                self.ui.put(lambda: show(names))
+            except Exception as e:
+                err = f"Couldn't search the network: {e}"
+                self.ui.put(lambda: show([], err))
+        threading.Thread(target=work, daemon=True, name="tv-discover").start()
+        w.update_idletasks()
+        w.geometry(f"+{self.root.winfo_rootx() + px(200)}+{self.root.winfo_rooty() + px(140)}")
+        w.grab_set()
+
     # ------------------------------------------------------------ record details (without playing)
 
     def show_details(self, rid, delay=0):
@@ -760,6 +924,9 @@ class VinylApp:
             return
 
         rec, side, idx = snap["record"], snap["side"], snap["idx"]
+        if (self.tv_active and self.core.config.get("tv_follow", True) and idx is not None
+                and not snap["side_done"] and self.tv_key != (rec["id"], side, idx)):
+            self.tv_watch(follow=True)
         self._set_playing_row(str(rec["id"]))
         self.show_cover(snap["cover"], rec["id"])
         tracks = snap["tracks"]
@@ -802,6 +969,8 @@ class VinylApp:
         self.render_tracklist()
 
     def _controls(self, show, track_mode=False, nudge=False):
+        tv_ok = show and tv.available() and self.core.config.get("tv_enabled", True)
+        self.tv_btn.grid() if tv_ok else self.tv_btn.grid_remove()
         for w in (self.prev_btn, self.next_btn):
             w.grid() if show and track_mode else w.grid_remove()
         for w in (self.back_btn, self.fwd_btn):
@@ -1371,9 +1540,76 @@ class VinylApp:
             w.after(800, refresh_lastfm)
         refresh_lastfm()
 
+        # ---- TV (music videos on a Chromecast)
+        f = tab("TV")
+        tk.Label(f, text="Music videos on your TV", bg=BG, fg=TEXT, font=(FONT, 11, "bold"), anchor="w").grid(
+            row=f.row, column=0, columnspan=2, sticky="w")
+        f.row += 1
+        tk.Label(f, text="Watch on TV plays the music video of the song that's on, in the YouTube app on your "
+                         "Chromecast. Videos come from Discogs first, then from a YouTube search. Each song is "
+                         "looked up once and remembered.",
+                 bg=BG, fg=MUTED, font=(FONT, 9), anchor="w", justify="left", wraplength=px(540)).grid(
+            row=f.row, column=0, columnspan=2, sticky="w", pady=(px(2), px(10)))
+        f.row += 1
+        v_tv = tk.BooleanVar(value=cfg["tv_enabled"])
+        v_tv_device = tk.StringVar(value=cfg["tv_device"])
+        v_tv_muted = tk.BooleanVar(value=cfg["tv_muted"])
+        v_tv_follow = tk.BooleanVar(value=cfg["tv_follow"])
+        if not tv.available():
+            tk.Label(f, text="This needs the pychromecast package (pip install pychromecast).", bg=BG, fg=FAINT,
+                     font=(FONT, 9), anchor="w").grid(row=f.row, column=0, columnspan=2, sticky="w")
+            f.row += 1
+        else:
+            check(f, "Show the Watch on TV button", v_tv, column=0)
+            f.row += 1
+            label(f, "Chromecast")
+            dev = tk.Frame(f, bg=BG)
+            dev.grid(row=f.row, column=1, sticky="w")
+            dev_box = ttk.Combobox(dev, textvariable=v_tv_device, values=[cfg["tv_device"]] if cfg["tv_device"] else [],
+                                   state="readonly", width=26, font=(FONT, 10))
+            dev_box.pack(side="left")
+            dev_status = tk.Label(dev, bg=BG, fg=FAINT, font=(FONT, 9))
+
+            def search_tvs():
+                dev_status.config(text="Searching…")
+
+                def work():
+                    try:
+                        names = self.core.tv.discover()
+                    except Exception as e:
+                        names, err = [], str(e)
+                    else:
+                        err = None
+
+                    def done():
+                        if not w.winfo_exists():
+                            return
+                        dev_box.config(values=names)
+                        if names and v_tv_device.get() not in names:
+                            v_tv_device.set(names[0])
+                        dev_status.config(text=err or (f"{len(names)} found" if names else
+                                                       "None found. Is it on, and on the same Wi-Fi?"))
+                    self.ui.put(done)
+                threading.Thread(target=work, daemon=True, name="tv-discover").start()
+            self.btn(dev, "Search", search_tvs, size=9).pack(side="left", padx=(px(8), 0))
+            dev_status.pack(side="left", padx=(px(8), 0))
+            f.row += 1
+            check(f, "Mute the TV while a video plays (the record is the music)", v_tv_muted, column=0)
+            f.row += 1
+            check(f, "Follow along: switch to the next song's video by itself", v_tv_follow, column=0)
+            f.row += 1
+            if not cfg["tv_device"]:
+                search_tvs()  # first visit: look right away
+        tk.Label(f, text="YouTube search is on." if videos.youtube_available() else
+                 "No YouTube key in this copy, so only the videos Discogs lists for a record are used.",
+                 bg=BG, fg=FAINT, font=(FONT, 9), anchor="w").grid(row=f.row, column=0, columnspan=2, sticky="w",
+                                                                    pady=(px(10), 0))
+        f.row += 1
+
         # What the settings were when the window opened (or last saved), to spot unsaved changes
         watched = [v_client, v_card, v_card_text, v_status, v_button, v_asset, v_user, v_token, v_auto, v_flip,
-                   v_share, v_hook, v_tray, v_startup, v_bot, v_bot_token, v_lfm]
+                   v_share, v_hook, v_tray, v_startup, v_bot, v_bot_token, v_lfm, v_tv, v_tv_device, v_tv_muted,
+                   v_tv_follow]
         baseline = {str(v): v.get() for v in watched}
 
         def close_settings():
@@ -1419,6 +1655,8 @@ class VinylApp:
                 "share_enabled": v_share.get(), "share_webhook": hook_url, "close_to_tray": v_tray.get(),
                 "bot_enabled": v_bot.get(), "bot_token": v_bot_token.get().strip(),
                 "lastfm_enabled": v_lfm.get(),
+                "tv_enabled": v_tv.get(), "tv_device": v_tv_device.get(), "tv_muted": v_tv_muted.get(),
+                "tv_follow": v_tv_follow.get(),
             })
             if v_startup.get() != tray.startup_enabled():
                 try:

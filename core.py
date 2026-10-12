@@ -16,6 +16,8 @@ from pathlib import Path
 import share
 from discord_ipc import PresenceWorker
 from lastfm import LastFM
+from tv import TV
+from videos import VideoFinder
 from server_bot import BotRunner
 from metadata import USER_AGENT, CollectionError, Library, clean_name, fetch_collection, norm, side_name
 
@@ -72,6 +74,11 @@ DEFAULT_CONFIG = {
     "lastfm_enabled": True,
     "lastfm_session": "",
     "lastfm_user": "",
+    # Music videos on a Chromecast
+    "tv_enabled": True,  # show the Watch on TV button
+    "tv_device": "",  # the Chromecast's name
+    "tv_muted": True,  # the record is the music
+    "tv_follow": True,  # switch videos when the record moves to the next song
 }
 SIDE_END_CLEAR_MINUTES = 10
 SHARE_AFTER_SECONDS = 30  # a record must play this long before it's posted, so mis-clicks aren't
@@ -205,6 +212,8 @@ class Core:
         self._sync_wake = threading.Event()
         self.library = Library(DATA / "releases.json", lambda: self.config.get("discogs_token", "").strip())
         self.lastfm = LastFM(self, DATA / "scrobbles.json")
+        self.videos = VideoFinder(DATA / "videos.json", lambda: self.config.get("discogs_token", "").strip())
+        self.tv = TV()
         self.discord = PresenceWorker()
         self.discord.set_client_id(self.config["discord_client_id"])
         self.discord.start()
@@ -379,6 +388,7 @@ class Core:
         return plays, last
 
     def shutdown(self):
+        self.tv.close()
         self.player.flush()
         self.library.save()
         self.bot.stop()
