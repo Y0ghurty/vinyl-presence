@@ -97,6 +97,7 @@ class VinylApp:
         self.meta_version = -1
         self.tv_active = False  # a video was started on the TV from this app
         self.tv_key = None  # (record, side, track) the TV shows
+        self.tv_video = None  # the video playing on the TV
         self.preview_rid = None  # record whose details are shown on the right (None = what's playing)
         self.preview_loading = None
         self.preview_job = None
@@ -636,20 +637,41 @@ class VinylApp:
         if self.tv_active:
             self.tv_sync()
 
-    def _tv_position(self, key):
-        """Where the record is now, in seconds, as long as it's still on the song the TV shows."""
+    def _tv_position(self, key, video_id):
+        """Where the video should be now: the record's position in the song, plus this video's fine-tuning."""
         def position():
             snap = self.core.player.snapshot()
             if not snap or (snap["record"]["id"], snap["side"], snap["idx"]) != key:
-                return None
+                return None  # the record moved on to another song
             start = snap["track_started"] if snap["side"] else snap["started"]
-            return max(0.0, time.time() - start / 1000)
+            return max(0.0, time.time() - start / 1000) + self.core.videos.offset(video_id)
         return position
 
     def tv_sync(self):
         """Line the video on the TV up with the record again."""
-        if self.tv_key:
-            self.bg(self.core.tv.sync, self._tv_position(self.tv_key))
+        if self.tv_key and self.tv_video:
+            self.bg(self.core.tv.sync, self._tv_position(self.tv_key, self.tv_video["id"]))
+
+    def tv_fine_tune(self, seconds):
+        """Move only the video (+ = further along). Remembered for this video, so it lines up next time too."""
+        if not self.tv_video:
+            return
+        vid = self.tv_video["id"]
+        self.core.videos.set_offset(vid, self.core.videos.offset(vid) + seconds)
+        self._tv_show_playing()
+        self.tv_sync()
+
+    def _tv_show_playing(self):
+        video, device = self.tv_video, self.core.config.get("tv_device", "")
+        title = video["title"] if len(video["title"]) <= 50 else video["title"][:49] + "…"
+        offset = self.core.videos.offset(video["id"])
+        shift = f"  ({offset:+g}s)" if offset else ""
+        self.tv_message(f"On {device}: {title}{shift}", MUTED, [
+            ("−1s", lambda: self.tv_fine_tune(-1)),
+            ("+1s", lambda: self.tv_fine_tune(1)),
+            ("Sync", self.tv_sync),
+            ("Other video", lambda: self.tv_watch(choose=True)),
+            ("Stop TV", self.tv_stop)])
 
     def _tv_play(self, rec, track, video):
         """Runs on a worker thread: starts the video, lines it up with the record, updates the TV line."""
@@ -657,21 +679,19 @@ class VinylApp:
         self.ui.put(lambda: self.tv_message(f"Starting on {device}…"))
         try:
             self.core.tv.play(device, video, muted=self.core.config.get("tv_muted", True),
-                              position=self._tv_position(self.tv_key))
+                              position=self._tv_position(self.tv_key, video["id"]))
         except Exception as e:
             msg = str(e)
             self.ui.put(lambda: self.tv_message(f"Couldn't play on {device}: {msg}", BAD,
                                                 [("Choose TV", lambda: self.pick_tv(then=self.tv_watch))]))
             return
         self.tv_active = True
-        title = video["title"] if len(video["title"]) <= 60 else video["title"][:59] + "…"
-        self.ui.put(lambda: self.tv_message(f"On {device}: {title}", MUTED, [
-            ("Sync", self.tv_sync),
-            ("Other video", lambda: self.tv_watch(choose=True)),
-            ("Stop TV", self.tv_stop)]))
+        self.tv_video = video
+        self.ui.put(self._tv_show_playing)
 
     def tv_stop(self):
         self.tv_active = False
+        self.tv_video = None
         self.tv_key = None
         self.tv_message("")
         self.bg(self.core.tv.stop)

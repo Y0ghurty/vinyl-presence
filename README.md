@@ -96,7 +96,7 @@ aren't, it shows the album with an elapsed timer.
 | Post what I play | Posts each record you play (after 30 seconds) to a Discord channel through its webhook URL |
 | Keep running in the tray | Closing the window hides it to the tray instead of quitting |
 | Last.fm | **Connect Last.fm** opens last.fm to approve the app; after that, tracks are scrobbled once they've played for half their length or 4 minutes |
-| TV | Your Chromecast, whether videos play muted (the record is the music), and **Follow along** to switch videos with the record |
+| TV | Your Chromecast, whether videos play muted (the record is the music), and **Follow along** to switch videos with the record. While a video plays, **−1s / +1s** fine-tune only the TV, remembered per video |
 | Start with Windows | Starts Vinyl Presence quietly in the tray when you log in |
 
 ### Setting up a "now spinning" channel

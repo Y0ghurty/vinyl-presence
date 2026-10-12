@@ -65,6 +65,7 @@ class VideoFinder:
             self.cache = {}
         self.cache.setdefault("songs", {})
         self.cache.setdefault("releases", {})
+        self.cache.setdefault("offsets", {})  # video id -> seconds the video runs ahead of (+) the record
 
     @staticmethod
     def _key(rec, track):
@@ -100,6 +101,21 @@ class VideoFinder:
             entry = self.cache["songs"].setdefault(key, {"candidates": [], "at": int(time.time())})
             entry["candidates"] = [video] + [v for v in entry["candidates"] if v["id"] != video["id"]]
             self._save()
+
+    def offset(self, video_id):
+        """The fine-tuning remembered for a video (its intro or edit differs from the record)."""
+        with self.lock:
+            return float(self.cache["offsets"].get(video_id, 0))
+
+    def set_offset(self, video_id, seconds):
+        seconds = round(seconds, 1)
+        with self.lock:
+            if seconds:
+                self.cache["offsets"][video_id] = seconds
+            else:
+                self.cache["offsets"].pop(video_id, None)
+            self._save()
+        return seconds
 
     def _discogs_videos(self, release_id):
         rid = str(release_id)
