@@ -4,12 +4,16 @@ Needs pychromecast. Nothing is hosted: the app talks to the Chromecast directly,
 the cast button in the YouTube app on your phone does.
 """
 import threading
+import time
 
 try:
     import pychromecast
     from pychromecast.controllers.youtube import YouTubeController
 except ImportError:
     pychromecast = None
+
+
+SEEK_LEAD = 1.0  # seconds: the jump itself takes about this long on a Chromecast
 
 
 def available():
@@ -55,8 +59,12 @@ class TV:
         cast.register_handler(youtube)
         self.cast, self.youtube, self.browser = cast, youtube, browser
 
-    def play(self, name, video, muted=True):
-        """Start a video ({'id', 'title'}) on the named Chromecast. Blocks for a few seconds."""
+    def play(self, name, video, muted=True, position=None):
+        """Start a video ({'id', 'title'}) on the named Chromecast. Blocks for a few seconds.
+
+        position() says where the record is now (seconds, or None if it moved on). Casting takes a
+        few seconds and YouTube starts at 0:00, so once the video really plays it's moved there.
+        """
         with self.lock:
             self.status = {"state": "connecting", "device": name, "video": video}
             try:
@@ -72,6 +80,37 @@ class TV:
                 self.status = {"state": "error", "device": name, "error": str(e)}
                 raise
             self.status = {"state": "playing", "device": name, "video": video}
+            if position and self._wait_until_playing(video["id"]):
+                self._seek(position)
+
+    def _wait_until_playing(self, video_id, timeout=25):
+        media = self.cast.media_controller
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            st = media.status
+            if st and st.content_id == video_id and st.player_state == "PLAYING":
+                return True
+            time.sleep(0.3)
+        print(f"[tv] {video_id} didn't start playing within {timeout} s, so it wasn't synced")
+        return False
+
+    def _seek(self, position):
+        target = position()
+        if target is None:
+            return  # the record moved on to another song meanwhile
+        target += SEEK_LEAD
+        media = self.cast.media_controller
+        duration = media.status.duration if media.status else None
+        if target < 1.5 or (duration and target > duration - 2):
+            return
+        media.seek(target)
+        print(f"[tv] synced the video to {int(target) // 60}:{int(target) % 60:02d}")
+
+    def sync(self, position):
+        """Line the video up with the record again (after nudging the timer, or by hand)."""
+        with self.lock:
+            if self.cast is not None and self.status.get("state") == "playing":
+                self._seek(position)
 
     def stop(self):
         with self.lock:

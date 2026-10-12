@@ -242,9 +242,9 @@ class VinylApp:
         self.tv_btn = self.btn(ctl, "▶  Watch on TV", lambda: self.tv_watch(), kind="ghost", size=9)
         self.tv_btn.grid(row=0, column=2, padx=(0, px(10)))
         # nudge the timer when play was clicked a bit before/after the needle dropped
-        self.back_btn = self.btn(ctl, "−10s", lambda: self.core.player.nudge(-10), kind="ghost", size=9)
+        self.back_btn = self.btn(ctl, "−10s", lambda: self.nudge(-10), kind="ghost", size=9)
         self.back_btn.grid(row=0, column=3, padx=(0, px(2)))
-        self.fwd_btn = self.btn(ctl, "+10s", lambda: self.core.player.nudge(10), kind="ghost", size=9)
+        self.fwd_btn = self.btn(ctl, "+10s", lambda: self.nudge(10), kind="ghost", size=9)
         self.fwd_btn.grid(row=0, column=4, padx=(0, px(14)))
         self.prev_btn = self.btn(ctl, "⏮", lambda: self.bg(self.core.player.control, "prev"), size=11)
         self.prev_btn.grid(row=0, column=5, padx=(0, px(6)))
@@ -631,12 +631,33 @@ class VinylApp:
                 self._tv_play(rec, track, found[0])
         threading.Thread(target=work, daemon=True, name="tv-find").start()
 
+    def nudge(self, seconds):
+        self.core.player.nudge(seconds)
+        if self.tv_active:
+            self.tv_sync()
+
+    def _tv_position(self, key):
+        """Where the record is now, in seconds, as long as it's still on the song the TV shows."""
+        def position():
+            snap = self.core.player.snapshot()
+            if not snap or (snap["record"]["id"], snap["side"], snap["idx"]) != key:
+                return None
+            start = snap["track_started"] if snap["side"] else snap["started"]
+            return max(0.0, time.time() - start / 1000)
+        return position
+
+    def tv_sync(self):
+        """Line the video on the TV up with the record again."""
+        if self.tv_key:
+            self.bg(self.core.tv.sync, self._tv_position(self.tv_key))
+
     def _tv_play(self, rec, track, video):
-        """Runs on a worker thread: starts the video and updates the TV line."""
+        """Runs on a worker thread: starts the video, lines it up with the record, updates the TV line."""
         device = self.core.config.get("tv_device", "")
         self.ui.put(lambda: self.tv_message(f"Starting on {device}…"))
         try:
-            self.core.tv.play(device, video, muted=self.core.config.get("tv_muted", True))
+            self.core.tv.play(device, video, muted=self.core.config.get("tv_muted", True),
+                              position=self._tv_position(self.tv_key))
         except Exception as e:
             msg = str(e)
             self.ui.put(lambda: self.tv_message(f"Couldn't play on {device}: {msg}", BAD,
@@ -645,6 +666,7 @@ class VinylApp:
         self.tv_active = True
         title = video["title"] if len(video["title"]) <= 60 else video["title"][:59] + "…"
         self.ui.put(lambda: self.tv_message(f"On {device}: {title}", MUTED, [
+            ("Sync", self.tv_sync),
             ("Other video", lambda: self.tv_watch(choose=True)),
             ("Stop TV", self.tv_stop)]))
 
