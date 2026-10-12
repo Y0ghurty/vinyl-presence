@@ -17,7 +17,7 @@ import share
 from discord_ipc import PresenceWorker
 from lastfm import LastFM
 from server_bot import BotRunner
-from metadata import USER_AGENT, CollectionError, Library, clean_name, fetch_collection, norm
+from metadata import USER_AGENT, CollectionError, Library, clean_name, fetch_collection, norm, side_name
 
 SOURCE_DIR = Path(__file__).resolve().parent
 # Bundled files. Inside the .exe, PyInstaller unpacks them to a temporary folder (_MEIPASS).
@@ -632,7 +632,7 @@ class Player:
                 return None
             rec, info = n["record"], n["info"]
             tracks = n["sides"].get(n["side"]) or []
-            side_label = f"Side {n['side']}" if n["side"] and len(n["side"]) <= 2 else (n["side"] or "")
+            side_label = side_name(n["side"])
             cover = info.get("cover")
             if cover and len(cover) > 256:
                 cover = info.get("thumb") if len(info.get("thumb") or "") <= 256 else None
@@ -660,7 +660,7 @@ class Player:
                 act["state"] = clip(rec["artist"])
                 if n["side_done"]:
                     nxt = self._next_side(n)
-                    large_text = f"{side_label} finished · flipping to Side {nxt}" if nxt else "Record finished"
+                    large_text = f"{side_label} finished · flipping to {side_name(nxt)}" if nxt else "Record finished"
                 else:
                     large_text = " · ".join(x for x in (side_label, on_medium, rec["year"]) if x)
                     act["timestamps"] = {"start": n["track_started"] if n["side"] else n["started"]}

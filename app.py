@@ -27,7 +27,7 @@ import tray
 import updater
 from core import ASSETS, DATA, ROOT, Core, search
 from covers import CoverGrid, ThumbCache
-from metadata import USER_AGENT
+from metadata import USER_AGENT, side_name
 from stats_view import StatsWindow
 from theme import ACCENT, ACCENT_DIM, ACCENT_HI, BAD, BG, FAINT, FONT, GOOD, LINE, MUTED, PANEL, PANEL2, ROW_ALT, TEXT, WARN
 from version import VERSION
@@ -64,10 +64,6 @@ DISCORD_STATES = {
 def fmt_time(sec):
     sec = max(0, int(sec))
     return f"{sec // 3600}:{sec // 60 % 60:02d}:{sec % 60:02d}" if sec >= 3600 else f"{sec // 60}:{sec % 60:02d}"
-
-
-def side_name(side):
-    return f"Side {side}" if side and len(side) <= 2 else (side or "")
 
 
 def short_format(fmt):
@@ -361,6 +357,7 @@ class VinylApp:
         tl = tk.Frame(rp, bg=PANEL)
         tl.pack(fill="both", expand=True, pady=(px(6), 0))
         self.tl_frame = tl
+        self.track_font = tkfont.Font(family=FONT, size=10)
         self.tracks = ttk.Treeview(tl, columns=("pos", "title", "dur"), show="", selectmode="browse")
         self.tracks.column("pos", width=px(40), stretch=False)
         self.tracks.column("title", width=px(200))
@@ -670,6 +667,9 @@ class VinylApp:
 
     def _fill_tracks(self, all_tracks, side=None, idx=None, side_done=False):
         """Tracks grouped per side; the playing side shows what's done and what's on."""
+        # wide enough for positions like "LP1-A1"
+        widest = max((self.track_font.measure(t["pos"]) for t in all_tracks), default=0)
+        self.tracks.column("pos", width=max(self.px(40), widest + self.px(16)))
         last_side = None
         side_counter = {}
         for t in all_tracks:
@@ -783,7 +783,9 @@ class VinylApp:
             self.title_lbl.config(text=tr["title"])
             self.sub_lbl.config(text=f"{tr.get('artist') or rec['artist']}  —  {rec['title']}")
         else:
-            self.eyebrow.config(text=" · ".join(p for p in ("NOW SPINNING", side_name(side).upper()) if p))
+            # no track lengths (vinyl-only releases): the side's timer runs, tracks are followed by hand
+            unknown = "TRACK LENGTHS UNKNOWN: DOUBLE-CLICK THE TRACK THAT'S ON" if snap["tracks"] else ""
+            self.eyebrow.config(text=" · ".join(p for p in ("NOW SPINNING", side_name(side).upper(), unknown) if p))
             self.title_lbl.config(text=rec["title"])
             extra = " · ".join(x for x in (rec["year"], rec["label"]) if x)
             self.sub_lbl.config(text=f"{rec['artist']}  ·  {extra}" if extra else rec["artist"])

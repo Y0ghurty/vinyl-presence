@@ -72,7 +72,7 @@ def record_from_activity(a):
     parts = [p.strip() for p in (assets.get("large_text") or "").split("·")]
     # While a track plays, the 3rd line is "Album · Side A · on vinyl"; otherwise the 1st line is the album.
     first = parts[0] if parts else ""
-    in_track_mode = first and not re.match(r"^(Side\b|on\b|Record finished|Disc\b|All$)", first)
+    in_track_mode = first and not re.match(r"^(Side\b|LP \d|on\b|Record finished|Disc\b|All$)", first)
     title = first if in_track_mode else (a.details or "")
     image = assets.get("large_image") or ""
     if image.startswith("mp:"):  # Discord's proxy for outside images

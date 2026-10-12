@@ -15,9 +15,10 @@ import urllib.parse
 import urllib.request
 from collections import deque
 
-USER_AGENT = "VinylPresence/1.0 (+local Discord Rich Presence app)"
+USER_AGENT = "VinylPresence/1.7 (+https://github.com/Y0ghurty/vinyl-presence)"
 DISCOGS = "https://api.discogs.com"
 DEEZER = "https://api.deezer.com"
+MUSICBRAINZ = "https://musicbrainz.org/ws/2"
 CACHE_VERSION = 2
 
 
@@ -57,14 +58,34 @@ def parse_duration(s):
 
 
 def side_of(position):
+    """The side a track is on, from its Discogs position.
+
+    A1 / B2 / AA -> "A" / "B" / "AA";  LP1-A1, 2-B3 (box sets) -> "1A", "2B";
+    CD1-3, 1-3 -> "Disc 1";  plain numbers -> "All".
+    """
     pos = (position or "").strip()
+    m = re.match(r"^(?:LP|Vinyl|Disc|Disk|Record)?\s*(\d+)\s*[-./:]?\s*([A-Za-z]+)\d*", pos, re.I)
+    if m and not re.match(r"^(?:CD)", pos, re.I):
+        return f"{int(m.group(1))}{m.group(2).upper()}"
+    m = re.match(r"^(?:CD|Disc|Disk)?\s*(\d+)\s*[-.]\s*\d+", pos, re.I)
+    if m:
+        return f"Disc {int(m.group(1))}"
     m = re.match(r"^([A-Za-z]+)", pos)
     if m:
         return m.group(1).upper()
-    m = re.match(r"^(?:CD)?(\d+)[-.]\d+", pos, re.I)
-    if m:
-        return f"Disc {m.group(1)}"
     return "All"
+
+
+def side_name(side):
+    """How a side is shown: "Side A", "LP 2 Side B", "Disc 1"."""
+    if not side:
+        return ""
+    if re.fullmatch(r"[A-Z]{1,2}", side):
+        return f"Side {side}"
+    m = re.fullmatch(r"(\d+)([A-Z]+)", side)
+    if m:
+        return f"LP {m.group(1)} Side {m.group(2)}"
+    return side
 
 
 def _get_json(url, headers=None, timeout=10):
@@ -211,6 +232,59 @@ def fetch_deezer(artist, title):
     return None
 
 
+_mb_lock = threading.Lock()
+_mb_last = [0.0]
+
+
+def _mb_get(url):
+    """MusicBrainz asks for at most one request per second, and says 503 when it's busy."""
+    for attempt in range(3):
+        with _mb_lock:
+            wait = 1.1 - (time.time() - _mb_last[0])
+            if wait > 0:
+                time.sleep(wait)
+            _mb_last[0] = time.time()
+        try:
+            return _get_json(url, timeout=20)
+        except urllib.error.HTTPError as e:
+            if e.code != 503 or attempt == 2:
+                raise
+            time.sleep(2 + 2 * attempt)
+
+
+def _same_album(got, want):
+    return got == want or (min(len(got), len(want)) >= 4 and (got in want or want in got))
+
+
+def fetch_musicbrainz(artist, title, track_count=0):
+    """Track lengths from MusicBrainz, for albums Deezer doesn't have (live albums, box sets, ...).
+
+    Returns {"tracks": [(title, seconds), ...]} or None.
+    """
+    want_title, want_artist = norm_core(title), norm(artist)
+    if not want_title:
+        return None
+    query = f'release:"{want_title}"'
+    if want_artist and want_artist not in ("various", "various artists"):
+        query += f' AND artist:"{want_artist}"'
+    data = _mb_get(f"{MUSICBRAINZ}/release/?" + urllib.parse.urlencode({"query": query, "fmt": "json", "limit": 10}))
+    found = [r for r in data.get("releases") or []
+             if r.get("score", 0) >= 80 and _same_album(norm_core(r.get("title")), want_title)]
+    # prefer the edition with the same number of tracks
+    found.sort(key=lambda r: (abs((r.get("track-count") or 0) - track_count) if track_count else 0, -r.get("score", 0)))
+    for r in found[:2]:
+        rel = _mb_get(f"{MUSICBRAINZ}/release/{r['id']}?inc=recordings&fmt=json")
+        tracks = []
+        for medium in rel.get("media") or []:
+            for t in medium.get("tracks") or []:
+                ms = t.get("length") or (t.get("recording") or {}).get("length")
+                tracks.append((t.get("title") or (t.get("recording") or {}).get("title") or "",
+                               round(ms / 1000) if ms else None))
+        if any(d for _, d in tracks):
+            return {"tracks": tracks}
+    return None
+
+
 def fill_durations(tracks, deezer_tracks):
     """Copy track lengths from Deezer onto Discogs tracks, matching by title."""
     if not deezer_tracks:
@@ -258,6 +332,10 @@ class Library:
             raw = json.loads(cache_path.read_text("utf-8"))
             if raw.get("_v") == CACHE_VERSION:
                 self.cache = raw.get("releases", {})
+                for info in self.cache.values():
+                    for t in info.get("tracks") or []:
+                        if t.get("pos") and t.get("side") != "All":
+                            t["side"] = side_of(t["pos"])
         except (OSError, ValueError):
             pass
         self._dirty = 0
@@ -282,6 +360,8 @@ class Library:
             info = self.cache.get(str(rid))
         if info is None:
             return True
+        if any(not t["duration"] for t in info.get("tracks") or []) and not info.get("mb_tried"):
+            return True  # looked up before MusicBrainz was a source: try again for the track lengths
         # A token added later can unlock covers that were missing before.
         return not info.get("cover") and not info.get("authed") and bool(self.get_token())
 
@@ -334,6 +414,18 @@ class Library:
                                       for i, (t, d) in enumerate(dz["tracks"])]
                 if not info["cover"]:
                     info["cover"], info["thumb"] = dz["cover"], dz["thumb"]
+        if not info["tracks"] or any(not t["duration"] for t in info["tracks"]):
+            try:
+                mb = fetch_musicbrainz(record["artist"], record["title"], len(info["tracks"]))
+                info["mb_tried"] = True  # only a finished lookup counts; errors are retried later
+            except (urllib.error.URLError, ValueError, RateLimited) as e:
+                print(f"[metadata] MusicBrainz: {e}")
+                mb = None
+            if mb:
+                fill_durations(info["tracks"], mb["tracks"])
+                if not info["tracks"]:
+                    info["tracks"] = [{"pos": str(i + 1), "side": "All", "title": t, "artist": "", "duration": d}
+                                      for i, (t, d) in enumerate(mb["tracks"])]
         with self.lock:
             self.cache[rid] = info
             self.version += 1
