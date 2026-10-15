@@ -1534,6 +1534,22 @@ class VinylApp:
 
         tk.Frame(f, bg=LINE, height=1).grid(row=f.row, column=0, columnspan=2, sticky="ew", pady=px(14))
         f.row += 1
+        tk.Label(f, text="vinylhangout.com", bg=BG, fg=TEXT, font=(FONT, 11, "bold"), anchor="w").grid(
+            row=f.row, column=0, columnspan=2, sticky="w")
+        f.row += 1
+        v_live = tk.BooleanVar(value=cfg["hangout_live"])
+        check(f, "Show me on the Live page: my Discord name and picture with the record I'm playing",
+              v_live, column=0)
+        f.row += 1
+        v_count = tk.BooleanVar(value=cfg["hangout_count"])
+        check(f, "Count me in the number of Vinyl Presence users (anonymous)", v_count, column=0)
+        f.row += 1
+        self.link(f, "See who's spinning on vinylhangout.com ↗", "https://vinylhangout.com/#live", bg=BG).grid(
+            row=f.row, column=0, columnspan=2, sticky="w", pady=(px(4), 0))
+        f.row += 1
+
+        tk.Frame(f, bg=LINE, height=1).grid(row=f.row, column=0, columnspan=2, sticky="ew", pady=px(14))
+        f.row += 1
         tk.Label(f, text="Tray & startup", bg=BG, fg=TEXT, font=(FONT, 11, "bold"), anchor="w").grid(
             row=f.row, column=0, columnspan=2, sticky="w")
         f.row += 1
@@ -1797,7 +1813,7 @@ class VinylApp:
         # What the settings were when the window opened (or last saved), to spot unsaved changes
         watched = [v_client, v_card, v_card_text, v_status, v_button, v_asset, v_user, v_token, v_auto, v_flip,
                    v_share, v_hook, v_tray, v_startup, v_bot, v_bot_token, v_lfm, v_tv, v_tv_device, v_tv_muted,
-                   v_tv_follow, v_own, v_sides, v_flip_remind, v_life, v_start]
+                   v_tv_follow, v_own, v_sides, v_flip_remind, v_life, v_start, v_live, v_count]
         baseline = {str(v): v.get() for v in watched}
 
         def close_settings():
@@ -1858,6 +1874,7 @@ class VinylApp:
                 "stylus_life_hours": life_h, "stylus_start_hours": start_h,
                 "tv_enabled": v_tv.get(), "tv_device": v_tv_device.get(), "tv_muted": v_tv_muted.get(),
                 "tv_follow": v_tv_follow.get(),
+                "hangout_live": v_live.get(), "hangout_count": v_count.get(),
             })
             if v_startup.get() != tray.startup_enabled():
                 try:

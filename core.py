@@ -11,10 +11,12 @@ import sys
 import threading
 import time
 import urllib.request
+import uuid
 from pathlib import Path
 
 import share
 from discord_ipc import PresenceWorker
+from hangout import Hangout
 from lastfm import LastFM
 from tv import TV
 from videos import VideoFinder
@@ -88,6 +90,10 @@ DEFAULT_CONFIG = {
     "tv_device": "",  # the Chromecast's name
     "tv_muted": True,  # the record is the music
     "tv_follow": True,  # switch videos when the record moves to the next song
+    # vinylhangout.com: an anonymous daily "I'm here" for the user count, and (opt-in) the Live page
+    "hangout_count": True,
+    "hangout_live": False,
+    "install_id": "",  # random, made on the first run; only identifies this install to the site
 }
 # The shared "Vinyl Presence" Discord application. Used when you haven't entered your own
 # Application ID, so new users can skip the Discord Developer Portal. Its ID is public, not a secret.
@@ -219,6 +225,9 @@ class Core:
         if not CONFIG_PATH.exists():
             save_json(CONFIG_PATH, self.config)
         self.history = load_json(HISTORY_PATH, [])
+        if not self.config["install_id"]:
+            self.config["install_id"] = uuid.uuid4().hex
+            save_json(CONFIG_PATH, self.config)
         if not self.config["stylus_since"]:
             self.config["stylus_since"] = min((h["at"] for h in self.history), default=int(time.time()))
             save_json(CONFIG_PATH, self.config)
@@ -237,6 +246,7 @@ class Core:
         self.app_assets = None  # art assets uploaded to the Discord app (None = not checked yet)
         self._assets_wake = threading.Event()
         self.player = Player(self)
+        self.hangout = Hangout(self)
         threading.Thread(target=self._watch_assets, daemon=True, name="assets").start()
         self.load_collection()
         threading.Thread(target=self._sync_loop, daemon=True, name="discogs-sync").start()
@@ -378,6 +388,7 @@ class Core:
             self.load_collection()  # the last sync of that user, or back to the CSV
             self.sync_now()
         self.player.push()
+        self.hangout.wake.set()
 
     def add_history(self, rid):
         self.history = [{"id": int(rid), "at": int(time.time())}] + self.history[:19999]
@@ -412,6 +423,7 @@ class Core:
         self.player.flush()
         self.library.save()
         self.bot.stop()
+        self.hangout.stop()
         self.discord.shutdown()
 
 

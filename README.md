@@ -31,6 +31,8 @@ spinning actual vinyl:
 - **Music videos on your TV:** play the video of the song that's on, on your Chromecast (an extra, optional).
 - **Now spinning channel:** optionally post what you play to a channel in a Discord server, or, as a
   server owner, run a bot that posts what all your members play.
+- **Live page:** optionally show what you're spinning on [vinylhangout.com](https://vinylhangout.com/#live),
+  next to everyone else who's playing a record right now.
 - **Stays out of the way:** it runs in the tray next to the clock and can start with Windows.
 - **A normal Windows app:** nothing to host, no account, no server.
 
@@ -154,6 +156,11 @@ with Windows).
 - **Last.fm:** only if you connect it; the tracks you play are scrobbled to your account.
 - **Music videos:** only when you click **Watch on TV**: the song is looked up on Discogs and YouTube (once, then
   remembered), and the video is sent to your Chromecast over your own Wi-Fi.
+- **vinylhangout.com user count:** about once a day the app sends a random ID and its version number, so
+  the site can count how many people use Vinyl Presence. Nothing else. Switch it off in
+  *Settings → Sharing & tray*.
+- **vinylhangout.com Live page:** only if you switch on *Show me on the Live page*: your Discord name and
+  picture, and the record you're playing (title, artist, cover, side and track). It disappears when you stop.
 
 Your collection, history and stats never leave your PC.
 
