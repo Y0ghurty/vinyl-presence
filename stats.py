@@ -3,15 +3,15 @@
 Each history entry is one listening session of a record: {"id", "at", "secs"}.
 Sessions from before listening time was tracked have no "secs"; for those the
 album's running time is used, but never longer than the time until the next
-session started. Restarting the same record within an hour counts as one play,
-and anything shorter than a minute (a mis-click) doesn't count as a play.
+session started. Playing the same record again right after itself counts as one
+play, however long the break, and anything shorter than a minute (a mis-click)
+doesn't count as a play.
 """
 import datetime as dt
 import time
 
 PERIODS = ["This month", "Last 30 days", "This year", "All time"]
 MIN_PLAY_SECONDS = 60
-MERGE_SECONDS = 3600
 
 
 def period_start(name):
@@ -46,17 +46,16 @@ def sessions(core):
 
 
 def plays(rows):
-    """Group sessions into plays: [(record id, seconds)]. Restarts within an hour are one play; < 1 minute isn't one."""
-    grouped = []  # [record id, start, end, seconds]
+    """Group sessions into plays: [(record id, seconds)]. The same record twice in a row is one play; < 1 minute isn't one."""
+    grouped = []  # [record id, seconds]
     for h, secs in rows:
         if secs < MIN_PLAY_SECONDS:
             continue
-        last = grouped[-1] if grouped else None
-        if last and last[0] == h["id"] and h["at"] - last[2] <= MERGE_SECONDS:
-            last[2], last[3] = h["at"] + secs, last[3] + secs
+        if grouped and grouped[-1][0] == h["id"]:
+            grouped[-1][1] += secs
         else:
-            grouped.append([h["id"], h["at"], h["at"] + secs, secs])
-    return [(rid, secs) for rid, _start, _end, secs in grouped]
+            grouped.append([h["id"], secs])
+    return [(rid, secs) for rid, secs in grouped]
 
 
 def compute(core, period):

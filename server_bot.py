@@ -22,7 +22,6 @@ except ImportError:
 from metadata import _get_json, clean_name
 
 POST_AFTER_SECONDS = 30
-REPOST_AFTER_SECONDS = 3 * 3600
 ACCENT = 0xEF7A3C
 # View Channel + Send Messages + Embed Links + Manage Roles (for /nowspinning role)
 INVITE_PERMISSIONS = 1024 + 2048 + 16384 + 268435456
@@ -271,7 +270,7 @@ class NowSpinningBot(discord.Client if discord else object):
     @staticmethod
     def _recently_posted(g, member_id, key):
         last = (g.get("posted") or {}).get(str(member_id))
-        return bool(last) and last["key"] == str(key) and time.time() - last["at"] < REPOST_AFTER_SECONDS
+        return bool(last) and last["key"] == str(key)  # never the same record twice in a row
 
     async def _sync_guild(self, guild):
         try:

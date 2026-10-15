@@ -15,6 +15,7 @@ import uuid
 from pathlib import Path
 
 import share
+import stats
 from discord_ipc import PresenceWorker
 from hangout import Hangout
 from lastfm import LastFM
@@ -78,6 +79,7 @@ DEFAULT_CONFIG = {
     # Post records you play to a Discord channel through a webhook
     "share_enabled": False,
     "share_webhook": "",
+    "share_last": 0,  # the record posted last, so the same record isn't posted twice in a row
     # Server owners: run a bot that posts what members play (they opt in with /nowspinning on)
     "bot_enabled": False,
     "bot_token": "",
@@ -243,7 +245,6 @@ class Core:
         self.discord = PresenceWorker()
         self.discord.set_client_id(self.client_id())
         self.discord.start()
-        self._shared = {}  # record id -> when it was last posted to the "now spinning" channel
         self.app_assets = None  # art assets uploaded to the Discord app (None = not checked yet)
         self._assets_wake = threading.Event()
         self.player = Player(self)
@@ -403,9 +404,10 @@ class Core:
 
     def share_now_spinning(self, rec, info):
         url = self.config["share_webhook"].strip()
-        if not url or time.time() - self._shared.get(rec["id"], 0) < 3 * 3600:
-            return  # don't post the same record again within a few hours
-        self._shared[rec["id"]] = time.time()
+        if not url or self.config.get("share_last") == int(rec["id"]):
+            return  # not the same record twice in a row (also not when the app restarts mid-record)
+        self.config["share_last"] = int(rec["id"])
+        save_json(CONFIG_PATH, self.config)
         try:
             share.post_record(url, rec, info, self.discord.status)
             print(f"[share] posted {rec['artist']} - {rec['title']}")
@@ -413,9 +415,11 @@ class Core:
             print(f"[share] couldn't post: {e}")
 
     def play_stats(self):
+        """record id -> plays (counted like the stats: the same record twice in a row is one), and -> last played."""
         plays, last = {}, {}
+        for rid, _secs in stats.plays(stats.sessions(self)):
+            plays[rid] = plays.get(rid, 0) + 1
         for h in self.history:
-            plays[h["id"]] = plays.get(h["id"], 0) + 1
             last.setdefault(h["id"], h["at"])
         return plays, last
 
