@@ -2,12 +2,16 @@
 
 Each history entry is one listening session of a record: {"id", "at", "secs"}.
 Sessions from before listening time was tracked have no "secs"; for those the
-album's running time is used when it's known.
+album's running time is used, but never longer than the time until the next
+session started. Restarting the same record within an hour counts as one play,
+and anything shorter than a minute (a mis-click) doesn't count as a play.
 """
 import datetime as dt
 import time
 
 PERIODS = ["This month", "Last 30 days", "This year", "All time"]
+MIN_PLAY_SECONDS = 60
+MERGE_SECONDS = 3600
 
 
 def period_start(name):
@@ -26,28 +30,51 @@ def _album_seconds(core, rid):
     return sum(t["duration"] or 0 for t in info.get("tracks") or [])
 
 
-def _session_seconds(core, entry):
-    return entry["secs"] if entry.get("secs") is not None else _album_seconds(core, entry["id"])
+def sessions(core):
+    """[(entry, seconds)] oldest first. Unmeasured sessions are estimated, but can't outlast the next one's start."""
+    hist = core.history  # newest first
+    out = []
+    for i, h in enumerate(hist):
+        secs = h.get("secs")
+        if secs is None:
+            secs = _album_seconds(core, h["id"])
+            if i > 0:
+                secs = min(secs, max(0, hist[i - 1]["at"] - h["at"]))
+        out.append((h, secs))
+    out.reverse()
+    return out
+
+
+def plays(rows):
+    """Group sessions into plays: [(record id, seconds)]. Restarts within an hour are one play; < 1 minute isn't one."""
+    grouped = []  # [record id, start, end, seconds]
+    for h, secs in rows:
+        if secs < MIN_PLAY_SECONDS:
+            continue
+        last = grouped[-1] if grouped else None
+        if last and last[0] == h["id"] and h["at"] - last[2] <= MERGE_SECONDS:
+            last[2], last[3] = h["at"] + secs, last[3] + secs
+        else:
+            grouped.append([h["id"], h["at"], h["at"] + secs, secs])
+    return [(rid, secs) for rid, _start, _end, secs in grouped]
 
 
 def compute(core, period):
     since = period_start(period)
-    sessions = [h for h in core.history if h["at"] >= since and str(h["id"]) in core.records]
-    records, artists, total = {}, {}, 0
-    for h in sessions:
-        rec = core.records[str(h["id"])]
-        secs = _session_seconds(core, h)
-        total += secs
-        for key, bucket in ((h["id"], records), (rec["artist"], artists)):
-            plays, s = bucket.get(key, (0, 0))
-            bucket[key] = (plays + 1, s + secs)
-    top_records = [(core.records[str(rid)], plays, secs)
-                   for rid, (plays, secs) in sorted(records.items(), key=lambda kv: (-kv[1][0], -kv[1][1]))[:10]]
-    top_artists = [(name, plays, secs)
-                   for name, (plays, secs) in sorted(artists.items(), key=lambda kv: (-kv[1][0], -kv[1][1]))[:10]]
+    rows = [(h, s) for h, s in sessions(core) if h["at"] >= since and str(h["id"]) in core.records]
+    records, artists = {}, {}
+    for rid, secs in plays(rows):
+        rec = core.records[str(rid)]
+        for key, bucket in ((rid, records), (rec["artist"], artists)):
+            n, s = bucket.get(key, (0, 0))
+            bucket[key] = (n + 1, s + secs)
+    top_records = [(core.records[str(rid)], n, secs)
+                   for rid, (n, secs) in sorted(records.items(), key=lambda kv: (-kv[1][0], -kv[1][1]))[:10]]
+    top_artists = [(name, n, secs)
+                   for name, (n, secs) in sorted(artists.items(), key=lambda kv: (-kv[1][0], -kv[1][1]))[:10]]
     return {
-        "seconds": total,
-        "sessions": len(sessions),
+        "seconds": sum(s for _h, s in rows),  # every second counts, mis-clicks included
+        "sessions": sum(n for n, _s in records.values()),
         "records": len(records),
         "top_records": top_records,
         "top_artists": top_artists,
@@ -64,10 +91,10 @@ def months(core, count=12):
         y, m = (y, m - 1) if m > 1 else (y - 1, 12)
     keys.reverse()
     totals = {k: 0.0 for k in keys}
-    for h in core.history:
+    for h, secs in sessions(core):
         d = dt.date.fromtimestamp(h["at"])
         if (d.year, d.month) in totals and str(h["id"]) in core.records:
-            totals[(d.year, d.month)] += _session_seconds(core, h) / 3600
+            totals[(d.year, d.month)] += secs / 3600
     return [(dt.date(y, m, 1).strftime("%b"), totals[(y, m)]) for y, m in keys]
 
 
@@ -76,7 +103,7 @@ def months(core, count=12):
 def stylus_hours(core):
     """Hours on the current stylus: listening since it was fitted, plus what it already had then."""
     since = core.config.get("stylus_since") or 0
-    seconds = sum(_session_seconds(core, h) for h in core.history if h["at"] >= since)
+    seconds = sum(secs for h, secs in sessions(core) if h["at"] >= since)
     return float(core.config.get("stylus_start_hours") or 0) + seconds / 3600
 
 
