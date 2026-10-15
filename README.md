@@ -22,7 +22,11 @@ spinning actual vinyl:
 - **Sides and tracks:** it knows each side's tracklist and track lengths, moves to the next track by
   itself, and asks you to flip the record when a side ends.
 - **Cover view:** browse your collection as a wall of album covers, like flipping through your shelf.
-- **Listening stats:** hours listened, your most played records and artists, and hours per month.
+- **Listening stats:** hours listened, your most played records and artists, hours per month, and a
+  **Vinyl Wrapped** picture to paste into Discord.
+- **Rediscover your shelf:** *Surprise me ▾* picks something you haven't played in a while, what you played
+  on this day last year, or a record from a decade or genre.
+- **Turntable care:** a flip reminder when a side ends, and a stylus counter that tells you when it's worn.
 - **Last.fm scrobbling:** the tracks you play on your turntable count on your Last.fm profile.
 - **Music videos on your TV:** play the video of the song that's on, on your Chromecast (an extra, optional).
 - **Now spinning channel:** optionally post what you play to a channel in a Discord server, or, as a
@@ -73,6 +77,8 @@ downloads and installs it, and the app restarts by itself. If a record is playin
 - Clicked play a bit early or late? **−10s** and **+10s** move the timer so the progress bar matches
   the record.
 - When a side ends, the app asks **Flip the record?**. You can also have it continue automatically.
+- When a side ends you get a notification to flip the record, and your Discord status shows which side
+  you're on, like *(2 of 4)* for a double LP.
 - Click **Stop** when you're done. If you forget, the status clears itself 10 minutes after the last side
   ends, or after an hour when track lengths are unknown.
 - **List / Covers** switches between the text list and the cover wall. **Stats** shows your listening.
@@ -92,6 +98,8 @@ aren't, it shows the album with an elapsed timer.
 | Vinyl badge asset name | The art asset from setup step 2 |
 | Discogs token | Optional. Discogs allows more lookups per minute with it ([get one](https://www.discogs.com/settings/developers)) |
 | Continue with the next side | Flip automatically after *n* seconds instead of waiting for you |
+| Flip reminder | A Windows notification when a side ends |
+| Stylus | Its lifespan (about 1,000 hours is typical) and the hours it already had; **I fitted a new stylus** starts over. *Stats* shows the wear, with a reminder at 90% and 100% |
 | Import Discogs CSV | Load a newer export after you buy records |
 | Post what I play | Posts each record you play (after 30 seconds) to a Discord channel through its webhook URL |
 | Keep running in the tray | Closing the window hides it to the tray instead of quitting |

@@ -118,7 +118,7 @@ class DiscordIPC:
 
 
 # Fields Discord added in 2025. If an older client rejects them we retry without.
-_NEWER_FIELDS = ("name", "status_display_type", "details_url", "state_url")
+_NEWER_FIELDS = ("name", "status_display_type", "details_url", "state_url", "party")
 _NEWER_ASSET_FIELDS = ("large_url", "small_url")
 
 

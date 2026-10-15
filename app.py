@@ -23,11 +23,12 @@ from tkinter import filedialog, messagebox, ttk
 import lastfm
 import server_bot
 import share
+import stats
 import tray
 import tv
 import videos
 import updater
-from core import ASSETS, DATA, ROOT, Core, search
+from core import ASSETS, DATA, ROOT, SHARED_APP_ID, Core, search
 from covers import CoverGrid, ThumbCache
 from metadata import USER_AGENT, side_name
 from stats_view import StatsWindow
@@ -41,7 +42,7 @@ except ImportError:  # covers in the window need Pillow; everything else works w
 
 SUPPORT_DISCORD = "https://discord.gg/xHj9Td7MYz"  # Vinyl Hangout: questions & help
 SHOW_REQUEST = DATA / "show.request"  # a second start drops this file to bring the window back
-SORTS = ["Artist A–Z", "Title A–Z", "Recently added", "Recently played", "Most played"]
+SORTS = ["Artist A–Z", "Title A–Z", "Recently added", "Recently played", "Most played", "Not played lately"]
 CARD_TITLES = {
     "app": "Listening to <app name>",
     "artist": "Listening to <artist>",
@@ -95,6 +96,7 @@ class VinylApp:
         self.tray = None
         self.items = []
         self.meta_version = -1
+        self.flip_key = None  # the side the flip reminder was shown for
         self.tv_active = False  # a video was started on the TV from this app
         self.tv_key = None  # (record, side, track) the TV shows
         self.tv_video = None  # the video playing on the TV
@@ -115,7 +117,7 @@ class VinylApp:
         self._start_tray()
         threading.Thread(target=self._check_update, daemon=True, name="update-check").start()
         threading.Thread(target=core.player.restore_state, daemon=True, name="resume").start()
-        if not core.config["discord_client_id"]:
+        if not core.client_id():
             self.root.after(600, self.open_settings)
 
     def px(self, v):
@@ -284,6 +286,8 @@ class VinylApp:
                                     bg=PANEL2, fg=FAINT, font=(FONT, 13))
         self.placeholder.place(in_=self.entry, x=0, rely=0.5, anchor="w")
         self.placeholder.bind("<Button-1>", lambda e: self.entry.focus_set())
+        self.surprise_menu_btn = self.btn(sr, "▾", self.surprise_menu)
+        self.surprise_menu_btn.pack(side="right", padx=(px(2), 0), fill="y")
         self.btn(sr, "Surprise me", self.surprise).pack(side="right", padx=(px(10), 0), fill="y")
 
         mr = tk.Frame(lp, bg=PANEL)
@@ -438,6 +442,8 @@ class VinylApp:
                 items = sorted(recs, key=lambda r: (-(last.get(r["id"]) or 0), r["_a"], r["_t"]))
             elif mode == "Most played":
                 items = sorted(recs, key=lambda r: (-plays.get(r["id"], 0), r["_a"], r["_t"]))
+            elif mode == "Not played lately":  # never played first, then longest ago
+                items = sorted(recs, key=lambda r: (last.get(r["id"]) or 0, r["_a"], r["_t"]))
             else:
                 items = sorted(recs, key=lambda r: (r["_a"], r["year"], r["_t"]))
             self.count_lbl.config(text=f"{len(recs)} records" if recs else "")
@@ -520,17 +526,72 @@ class VinylApp:
             return "break"
 
     def surprise(self):
-        if not self.items:
-            return
-        pick = random.choice(self.items)["id"]
+        if self.items:
+            self._suggest(random.choice(self.items), "How about this one? Press Enter to play it.")
+
+    def _suggest(self, rec, message):
+        """Select a record, show its details and say why it was picked."""
+        rid = rec["id"]
+        if self.q.get():
+            self.q.set("")  # the suggestion may not be in the current search results
+            self.refresh_list()
         if self.view == "covers":
-            self.grid_view.select_id(pick)
-        else:
-            self.tree.selection_set(str(pick))
-            self.tree.see(str(pick))
+            self.grid_view.select_id(rid)
+        elif self.tree.exists(str(rid)):
+            self.tree.selection_set(str(rid))
+            self.tree.see(str(rid))
         self.entry.focus_set()
-        self.show_details(pick)
-        self.count_lbl.config(text="How about this one? Press Enter to play it.")
+        self.show_details(rid)
+        self.count_lbl.config(text=message)
+
+    def surprise_menu(self):
+        """Ways to rediscover your shelf: not played lately, on this day, by decade or genre."""
+        menu = tk.Menu(self.root, tearoff=0, bg=PANEL2, fg=TEXT, activebackground=ACCENT_DIM,
+                       activeforeground=TEXT, bd=0, font=(FONT, 10))
+        menu.add_command(label="Anything", command=self.surprise)
+        menu.add_command(label="Haven't played in a while", command=self.suggest_not_lately)
+        menu.add_command(label="On this day…", command=self.suggest_on_this_day)
+        decades = stats.decades(self.core)
+        if decades:
+            sub = tk.Menu(menu, tearoff=0, bg=PANEL2, fg=TEXT, activebackground=ACCENT_DIM, activeforeground=TEXT,
+                          font=(FONT, 10))
+            for dec in decades:
+                sub.add_command(label=f"The {dec}s", command=lambda dec=dec: self.suggest_from(
+                    lambda r: r["year"].isdigit() and int(r["year"]) // 10 * 10 == dec, f"the {dec}s"))
+            menu.add_cascade(label="From the…", menu=sub)
+        genres = stats.top_genres(self.core)
+        if genres:
+            sub = tk.Menu(menu, tearoff=0, bg=PANEL2, fg=TEXT, activebackground=ACCENT_DIM, activeforeground=TEXT,
+                          font=(FONT, 10))
+            for g in genres:
+                sub.add_command(label=g, command=lambda g=g: self.suggest_from(lambda r: g in r.get("genres", []), g))
+            menu.add_cascade(label="Genre", menu=sub)
+        b = self.surprise_menu_btn
+        menu.tk_popup(b.winfo_rootx(), b.winfo_rooty() + b.winfo_height())
+
+    def suggest_from(self, test, what):
+        picks = [r for r in self.core.records.values() if test(r)]
+        if picks:
+            self._suggest(random.choice(picks), f"Something from {what}. Press Enter to play it.")
+
+    def suggest_not_lately(self):
+        never, old = stats.not_played_lately(self.core)
+        if never:
+            self._suggest(random.choice(never), "You haven't played this one in Vinyl Presence yet. Press Enter to play it.")
+        elif old:
+            rec = random.choice(old[:20])
+            when = time.strftime("%B %Y", time.localtime(stats.last_played(self.core)[rec["id"]]))
+            self._suggest(rec, f"Last played in {when}. Time for another spin? Press Enter to play it.")
+        else:
+            self.count_lbl.config(text="You've played everything recently. Impressive!")
+
+    def suggest_on_this_day(self):
+        found = stats.on_this_day(self.core)
+        if not found:
+            self.count_lbl.config(text="Nothing played on this date in earlier years yet. Check back next year!")
+            return
+        rec, year = random.choice(found)
+        self._suggest(rec, f"On this day in {year} you played this. Press Enter to play it again.")
 
     def play_selected(self):
         if self.view == "covers":
@@ -579,6 +640,33 @@ class VinylApp:
         self.play(rid, side, int(rest[0]) if kind == "t" else None)
 
     # ------------------------------------------------------------ music video on the TV
+
+    def notify(self, title, message):
+        """A Windows notification (from the tray icon), or else the taskbar button flashes."""
+        if self.tray:
+            self.tray.notify(message, title)
+        elif sys.platform == "win32":
+            class FLASHWINFO(ctypes.Structure):
+                _fields_ = [("cbSize", ctypes.c_uint), ("hwnd", ctypes.c_void_p), ("dwFlags", ctypes.c_uint),
+                            ("uCount", ctypes.c_uint), ("dwTimeout", ctypes.c_uint)]
+            info = FLASHWINFO(ctypes.sizeof(FLASHWINFO), ctypes.windll.user32.GetParent(self.root.winfo_id()),
+                              0x3 | 0xC, 0, 0)  # flash caption and taskbar until the window is opened
+            ctypes.windll.user32.FlashWindowEx(ctypes.byref(info))
+
+    def _check_stylus(self):
+        """A reminder at 90% and 100% of the stylus' usual life."""
+        cfg = self.core.config
+        life = max(1, cfg.get("stylus_life_hours") or 1000)
+        hours = stats.stylus_hours(self.core)
+        level = 100 if hours >= life else 90 if hours >= 0.9 * life else 0
+        if level > cfg.get("stylus_warned", 0):
+            self.core.update_config({"stylus_warned": level})
+            if level == 100:
+                self.notify("Time for a new stylus", f"Your stylus has played {hours:.0f} hours, about its usual "
+                            f"life of {life}. A fresh one keeps your records sounding (and lasting) their best.")
+            else:
+                self.notify("Your stylus is at 90%", f"{hours:.0f} of about {life} hours played. "
+                            "Good moment to order a new one.")
 
     def _tv_now(self):
         """(record, track or None) of what's playing, for finding its video."""
@@ -917,6 +1005,8 @@ class VinylApp:
             self.now_sig = sig
             self.render_now(snap)
         self.render_progress(snap)
+        if self.ticks % 300 == 150:  # once a minute
+            self._check_stylus()
         if self.ticks % 5 == 0:
             self.render_status()
             if SHOW_REQUEST.exists():  # someone started the app again while it's in the tray
@@ -966,6 +1056,8 @@ class VinylApp:
             return
 
         rec, side, idx = snap["record"], snap["side"], snap["idx"]
+        if not snap["side_done"]:
+            self.flip_key = None
         if (self.tv_active and self.core.config.get("tv_follow", True) and idx is not None
                 and not snap["side_done"] and self.tv_key != (rec["id"], side, idx)):
             self.tv_watch(follow=True)
@@ -974,6 +1066,10 @@ class VinylApp:
         tracks = snap["tracks"]
         if snap["side_done"]:
             nxt = snap["next_side"]
+            if self.core.config.get("flip_reminder", True) and self.flip_key != (rec["id"], side):
+                self.flip_key = (rec["id"], side)
+                self.notify(f"{side_name(side)} finished",
+                            f"Time to flip to {side_name(nxt)}." if nxt else f"That's the end of {rec['title']}.")
             self.eyebrow.config(text=f"{side_name(side).upper()} FINISHED")
             self.title_lbl.config(text=rec["title"])
             self.sub_lbl.config(text=rec["artist"])
@@ -1172,7 +1268,8 @@ class VinylApp:
         g.pack(fill="x", padx=px(16), pady=px(12))
         head = tk.Frame(g, bg=PANEL)
         head.pack(fill="x")
-        tk.Label(head, text="Connect to Discord (one time, about 2 minutes)", bg=PANEL, fg=TEXT,
+        tk.Label(head, text="Your own Discord application (optional)" if SHARED_APP_ID else
+                 "Connect to Discord (one time, about 2 minutes)", bg=PANEL, fg=TEXT,
                  font=(FONT, 11, "bold"), anchor="w").pack(side="left")
         steps_box = tk.Frame(g, bg=PANEL)
         steps = [
@@ -1205,14 +1302,26 @@ class VinylApp:
         toggle = tk.Label(head, bg=PANEL, fg=ACCENT, cursor="hand2", font=(FONT, 9))
         toggle.bind("<Button-1>", toggle_steps)
         toggle.pack(side="right")
-        if cfg["discord_client_id"]:  # already set up: keep the guide folded away
+        if cfg["discord_client_id"] or SHARED_APP_ID:  # set up (or not needed): keep the guide folded away
             toggle.config(text="Show steps ▾")
         else:
             toggle_steps()
 
         v_client = tk.StringVar(value=cfg["discord_client_id"])
+        v_own = tk.BooleanVar(value=bool(cfg["discord_client_id"]) or not SHARED_APP_ID)
+        if SHARED_APP_ID:
+            for value, text in ((False, "Use the shared Vinyl Presence app: nothing to set up"),
+                                (True, "Use my own Discord application (the steps above)")):
+                tk.Radiobutton(f, text=text, variable=v_own, value=value, bg=BG, fg=TEXT, selectcolor=PANEL2,
+                               activebackground=BG, activeforeground=TEXT, font=(FONT, 10), anchor="w",
+                               command=lambda: client_entry.config(state="normal" if v_own.get() else "disabled")
+                               ).grid(row=f.row, column=0, columnspan=2, sticky="w")
+                f.row += 1
         label(f, "Discord Application ID")
-        self.make_entry(f, v_client).grid(row=f.row, column=1, sticky="ew", ipady=px(3))
+        client_entry = self.make_entry(f, v_client)
+        client_entry.grid(row=f.row, column=1, sticky="ew", ipady=px(3))
+        client_entry.config(state="normal" if v_own.get() else "disabled", disabledbackground=BG,
+                            disabledforeground=FAINT)
         f.row += 1
 
         v_card = tk.StringVar(value=CARD_TITLES.get(cfg["card_title"], CARD_TITLES["app"]))
@@ -1243,6 +1352,9 @@ class VinylApp:
 
         v_button = tk.BooleanVar(value=cfg["show_discogs_button"])
         check(f, "Show a \"View on Discogs\" button on my status", v_button)
+        f.row += 1
+        v_sides = tk.BooleanVar(value=cfg["show_side_count"])
+        check(f, "Show which side is on, like \"(2 of 4)\" for a double LP", v_sides)
         f.row += 1
 
         v_asset = tk.StringVar(value=cfg["vinyl_asset"])
@@ -1335,6 +1447,40 @@ class VinylApp:
         tk.Spinbox(flip, from_=0, to=600, increment=5, textvariable=v_flip, width=4, bg=PANEL2, fg=TEXT,
                    buttonbackground=PANEL2, insertbackground=TEXT, relief="flat", font=(FONT, 10)).pack(side="left")
         tk.Label(flip, text="sec", bg=BG, fg=TEXT, font=(FONT, 10)).pack(side="left", padx=px(4))
+        f.row += 1
+        v_flip_remind = tk.BooleanVar(value=cfg["flip_reminder"])
+        check(f, "Remind me to flip the record when a side ends (a Windows notification)", v_flip_remind, column=0)
+        f.row += 1
+
+        tk.Frame(f, bg=LINE, height=1).grid(row=f.row, column=0, columnspan=2, sticky="ew", pady=px(12))
+        f.row += 1
+        v_life = tk.StringVar(value=str(cfg["stylus_life_hours"]))
+        v_start = tk.StringVar(value=f"{cfg['stylus_start_hours']:g}")
+        label(f, "Stylus lifespan (hours)", "Check your stylus' box; around 1,000 hours is typical.")
+        tk.Spinbox(f, from_=100, to=5000, increment=100, textvariable=v_life, width=6, bg=PANEL2, fg=TEXT,
+                   buttonbackground=PANEL2, insertbackground=TEXT, relief="flat", font=(FONT, 10)).grid(
+            row=f.row, column=1, sticky="w")
+        f.row += 2
+        label(f, "Hours it already had", "If it wasn't new when Vinyl Presence started counting.")
+        self.make_entry(f, v_start, width=8).grid(row=f.row, column=1, sticky="w", ipady=px(3))
+        f.row += 2
+        stylus_row = tk.Frame(f, bg=BG)
+        stylus_row.grid(row=f.row, column=0, columnspan=2, sticky="w", pady=(px(6), 0))
+        stylus_lbl = tk.Label(stylus_row, bg=BG, fg=MUTED, font=(FONT, 10))
+        stylus_lbl.pack(side="left")
+
+        def show_stylus():
+            stylus_lbl.config(text=f"Your stylus has played {stats.stylus_hours(self.core):.0f} hours.")
+
+        def new_stylus():
+            if messagebox.askyesno("Stylus", "Start counting from zero for a new stylus?", parent=w):
+                self.core.update_config({"stylus_since": int(time.time()), "stylus_start_hours": 0.0,
+                                         "stylus_warned": 0})
+                v_start.set("0")
+                baseline[str(v_start)] = "0"
+                show_stylus()
+        show_stylus()
+        self.btn(stylus_row, "I fitted a new stylus", new_stylus, size=9).pack(side="left", padx=(px(12), 0))
         f.row += 1
 
         # ---- Sharing & tray
@@ -1651,7 +1797,7 @@ class VinylApp:
         # What the settings were when the window opened (or last saved), to spot unsaved changes
         watched = [v_client, v_card, v_card_text, v_status, v_button, v_asset, v_user, v_token, v_auto, v_flip,
                    v_share, v_hook, v_tray, v_startup, v_bot, v_bot_token, v_lfm, v_tv, v_tv_device, v_tv_muted,
-                   v_tv_follow]
+                   v_tv_follow, v_own, v_sides, v_flip_remind, v_life, v_start]
         baseline = {str(v): v.get() for v in watched}
 
         def close_settings():
@@ -1665,7 +1811,11 @@ class VinylApp:
             w.destroy()
 
         def save():
-            client = v_client.get().strip()
+            client = v_client.get().strip() if v_own.get() else ""
+            if v_own.get() and SHARED_APP_ID and not client:
+                tabs.select(0)
+                messagebox.showerror("Settings", "Paste your Application ID, or choose the shared app.", parent=w)
+                return
             if client and not client.isdigit():
                 tabs.select(0)
                 messagebox.showerror("Settings", "The Application ID is a long number, e.g. 1234567890123456789.",
@@ -1686,6 +1836,13 @@ class VinylApp:
                 flip_s = max(0, int(v_flip.get()))
             except ValueError:
                 flip_s = 30
+            try:
+                life_h = max(50, int(float(v_life.get())))
+                start_h = max(0.0, float(v_start.get().replace(",", ".") or 0))
+            except ValueError:
+                tabs.select(1)
+                messagebox.showerror("Settings", "The stylus hours should be numbers.", parent=w)
+                return
             status_key = next(k for k, v in STATUS_CHOICES.items() if v == v_status.get())
             card_key = next(k for k, v in CARD_TITLES.items() if v == v_card.get())
             self.core.update_config({
@@ -1697,6 +1854,8 @@ class VinylApp:
                 "share_enabled": v_share.get(), "share_webhook": hook_url, "close_to_tray": v_tray.get(),
                 "bot_enabled": v_bot.get(), "bot_token": v_bot_token.get().strip(),
                 "lastfm_enabled": v_lfm.get(),
+                "show_side_count": v_sides.get(), "flip_reminder": v_flip_remind.get(),
+                "stylus_life_hours": life_h, "stylus_start_hours": start_h,
                 "tv_enabled": v_tv.get(), "tv_device": v_tv_device.get(), "tv_muted": v_tv_muted.get(),
                 "tv_follow": v_tv_follow.get(),
             })

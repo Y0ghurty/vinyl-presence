@@ -69,3 +69,58 @@ def months(core, count=12):
         if (d.year, d.month) in totals and str(h["id"]) in core.records:
             totals[(d.year, d.month)] += _session_seconds(core, h) / 3600
     return [(dt.date(y, m, 1).strftime("%b"), totals[(y, m)]) for y, m in keys]
+
+
+# ---------------------------------------------------------------- stylus wear
+
+def stylus_hours(core):
+    """Hours on the current stylus: listening since it was fitted, plus what it already had then."""
+    since = core.config.get("stylus_since") or 0
+    seconds = sum(_session_seconds(core, h) for h in core.history if h["at"] >= since)
+    return float(core.config.get("stylus_start_hours") or 0) + seconds / 3600
+
+
+# ---------------------------------------------------------------- rediscover your shelf
+
+def last_played(core):
+    """record id -> when it was last played."""
+    last = {}
+    for h in core.history:
+        last.setdefault(h["id"], h["at"])
+    return last
+
+
+def not_played_lately(core, months=6):
+    """Records never played in Vinyl Presence, or not for `months` months. Never played come first."""
+    last = last_played(core)
+    cutoff = time.time() - months * 30 * 86400
+    never = [r for r in core.records.values() if r["id"] not in last]
+    old = sorted((r for r in core.records.values() if r["id"] in last and last[r["id"]] < cutoff),
+                 key=lambda r: last[r["id"]])
+    return never, old
+
+
+def on_this_day(core):
+    """Records you played on this date in earlier years: [(record, year)], most recent year first."""
+    today = dt.date.today()
+    seen, out = set(), []
+    for h in core.history:
+        d = dt.date.fromtimestamp(h["at"])
+        if (d.month, d.day) == (today.month, today.day) and d.year < today.year and h["id"] not in seen:
+            rec = core.records.get(str(h["id"]))
+            if rec:
+                seen.add(h["id"])
+                out.append((rec, d.year))
+    return out
+
+
+def decades(core):
+    return sorted({int(r["year"]) // 10 * 10 for r in core.records.values() if r["year"].isdigit()})
+
+
+def top_genres(core, count=14):
+    counts = {}
+    for r in core.records.values():
+        for g in r.get("genres", []):
+            counts[g] = counts.get(g, 0) + 1
+    return [g for g, _ in sorted(counts.items(), key=lambda kv: -kv[1])[:count]]

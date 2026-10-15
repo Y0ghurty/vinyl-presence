@@ -195,6 +195,7 @@ def fetch_collection(username, token=None, progress=None):
                 "added": (item.get("date_added") or "")[:19].replace("T", " "),
                 "cover": b.get("cover_image") or None,
                 "thumb": b.get("thumb") or None,
+                "genres": list(dict.fromkeys((b.get("genres") or []) + (b.get("styles") or []))),
             }
         if progress:
             progress(len(records), total)

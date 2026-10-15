@@ -54,6 +54,15 @@ DEFAULT_CONFIG = {
     # Name of the Rich Presence art asset you uploaded (assets/vinyl.png). Leave empty if you didn't.
     "vinyl_asset": "vinyl",
     "show_discogs_button": True,
+    # Show which side of a multi-side record is on, as Discord's "(2 of 4)"
+    "show_side_count": True,
+    # A Windows notification when a side ends
+    "flip_reminder": True,
+    # Stylus wear: listening time since stylus_since (plus hours it already had), against its lifespan
+    "stylus_since": 0,
+    "stylus_start_hours": 0.0,
+    "stylus_life_hours": 1000,
+    "stylus_warned": 0,  # 90 or 100 once the reminder for that point was shown
     # When a side ends: False = wait for you to pick the next side, True = flip automatically
     "auto_continue": False,
     "flip_seconds": 30,
@@ -80,6 +89,9 @@ DEFAULT_CONFIG = {
     "tv_muted": True,  # the record is the music
     "tv_follow": True,  # switch videos when the record moves to the next song
 }
+# The shared "Vinyl Presence" Discord application. Used when you haven't entered your own
+# Application ID, so new users can skip the Discord Developer Portal. Its ID is public, not a secret.
+SHARED_APP_ID = ""
 SIDE_END_CLEAR_MINUTES = 10
 SHARE_AFTER_SECONDS = 30  # a record must play this long before it's posted, so mis-clicks aren't
 STATUS_DISPLAY_TYPES = {"app": 0, "artist": 1, "title": 2}
@@ -152,7 +164,8 @@ def parse_collection(text):
 def index_record(rec):
     """Pre-normalized fields for fast, accent-insensitive search."""
     rec["_a"], rec["_t"] = norm(rec["artist"]), norm(rec["title"])
-    rec["_h"] = norm(" ".join(rec[k] for k in ("artist", "title", "label", "catno", "year", "format")))
+    rec["_h"] = norm(" ".join([rec[k] for k in ("artist", "title", "label", "catno", "year", "format")]
+                              + rec.get("genres", [])))
     rec["_w"] = rec["_h"].split()
     return rec
 
@@ -206,6 +219,9 @@ class Core:
         if not CONFIG_PATH.exists():
             save_json(CONFIG_PATH, self.config)
         self.history = load_json(HISTORY_PATH, [])
+        if not self.config["stylus_since"]:
+            self.config["stylus_since"] = min((h["at"] for h in self.history), default=int(time.time()))
+            save_json(CONFIG_PATH, self.config)
         self.records, self.collection_file = {}, None
         self.collection_version = 0  # bumps whenever the record list changes, so the window can refresh
         self.sync_status = {"state": "off"}
@@ -215,7 +231,7 @@ class Core:
         self.videos = VideoFinder(DATA / "videos.json", lambda: self.config.get("discogs_token", "").strip())
         self.tv = TV()
         self.discord = PresenceWorker()
-        self.discord.set_client_id(self.config["discord_client_id"])
+        self.discord.set_client_id(self.client_id())
         self.discord.start()
         self._shared = {}  # record id -> when it was last posted to the "now spinning" channel
         self.app_assets = None  # art assets uploaded to the Discord app (None = not checked yet)
@@ -238,7 +254,7 @@ class Core:
         """Check which images are uploaded to the Discord app, so we never point at a missing badge."""
         checked = None
         while True:
-            cid, want = self.config["discord_client_id"], self.config["vinyl_asset"].strip()
+            cid, want = self.client_id(), self.config["vinyl_asset"].strip()
             if cid and (cid != checked or (want and want not in (self.app_assets or ()))):
                 url = f"https://discord.com/api/v10/oauth2/applications/{cid}/assets"
                 try:
@@ -253,6 +269,10 @@ class Core:
                     pass
             self._assets_wake.wait(120)
             self._assets_wake.clear()
+
+    def client_id(self):
+        """Your own Discord Application ID, or else the shared Vinyl Presence app."""
+        return self.config["discord_client_id"].strip() or SHARED_APP_ID
 
     def has_badge(self):
         want = self.config["vinyl_asset"].strip()
@@ -348,7 +368,7 @@ class Core:
             if key in DEFAULT_CONFIG:
                 self.config[key] = type(DEFAULT_CONFIG[key])(value)
         save_json(CONFIG_PATH, self.config)
-        self.discord.set_client_id(self.config["discord_client_id"])
+        self.discord.set_client_id(self.client_id())
         self._assets_wake.set()
         if token_changed and self.config["discogs_token"]:
             self.library.prefetch(list(self.records.values()))
@@ -695,6 +715,10 @@ class Player:
                 del act["assets"]
             if cfg.get("show_discogs_button", True):
                 act["buttons"] = [{"label": "View on Discogs", "url": url}]
+            sides = list(n["sides"])
+            if cfg.get("show_side_count", True) and len(sides) > 1 and n["side"] in sides:
+                # Discord shows a party's size after the artist: "Pink Floyd (2 of 4)"
+                act["party"] = {"id": f"vinyl-presence-{rec['id']}", "size": [sides.index(n["side"]) + 1, len(sides)]}
             return {k: v for k, v in act.items() if v is not None}
 
     def snapshot(self):

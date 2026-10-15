@@ -1,10 +1,16 @@
 """The stats window: hours listened, most played records and artists, hours per month."""
+import threading
 import tkinter as tk
-from tkinter import ttk
+from tkinter import filedialog, messagebox, ttk
 
 import stats
 from covers import ThumbCache
-from theme import BG, CHART, FAINT, FONT, LINE, MUTED, PANEL, PANEL2, TEXT
+from theme import ACCENT, BAD, BG, CHART, FAINT, FONT, GOOD, LINE, MUTED, PANEL, PANEL2, TEXT, WARN
+
+try:
+    import wrapped  # the shareable picture needs Pillow
+except ImportError:
+    wrapped = None
 
 
 def fmt_hours(secs):
@@ -36,11 +42,24 @@ class StatsWindow:
         self.period.set(stats.PERIODS[0])
         self.period.pack(side="right")
         self.period.bind("<<ComboboxSelected>>", lambda e: self.render())
+        if wrapped:
+            app.btn(head, "Save image…", self.save_image, size=9).pack(side="right", padx=(0, px(8)))
+            app.btn(head, "Copy image", self.copy_image, kind="accent", size=9).pack(side="right", padx=(0, px(6)))
+            self.share_lbl = tk.Label(head, bg=BG, fg=FAINT, font=(FONT, 9))
+            self.share_lbl.pack(side="right", padx=(0, px(10)))
 
         self.tiles = tk.Frame(pad, bg=BG)
         self.tiles.pack(fill="x", pady=(px(14), 0))
         for i in range(4):
             self.tiles.columnconfigure(i, weight=1, uniform="tile")
+
+        stylus = tk.Frame(pad, bg=PANEL)
+        stylus.pack(fill="x", pady=(px(14), 0))
+        self.stylus_lbl = tk.Label(stylus, bg=PANEL, fg=TEXT, font=(FONT, 10), anchor="w")
+        self.stylus_lbl.pack(side="left", padx=(px(16), px(12)), pady=px(10))
+        self.stylus_bar = tk.Canvas(stylus, height=px(8), width=px(200), bg=PANEL, highlightthickness=0)
+        self.stylus_bar.pack(side="left", fill="x", expand=True, padx=(0, px(16)))
+        self.stylus_bar.bind("<Configure>", lambda e: self.draw_stylus())
 
         chart_box = tk.Frame(pad, bg=PANEL)
         chart_box.pack(fill="x", pady=(px(14), 0))
@@ -89,6 +108,7 @@ class StatsWindow:
         self._fill_artists(data["top_artists"])
         self.months = stats.months(self.app.core)
         self.draw_chart()
+        self.draw_stylus()
 
     def _tile(self, col, value, label):
         px = self.app.px
@@ -144,6 +164,63 @@ class StatsWindow:
             tk.Label(row, text=name, bg=PANEL, fg=TEXT, font=(FONT, 10), anchor="w").pack(side="left", fill="x",
                                                                                           expand=True)
             tk.Label(row, text=f"{plays}× · {fmt_hours(secs)}", bg=PANEL, fg=MUTED, font=(FONT, 9)).pack(side="right")
+
+    # -- stylus wear
+
+    def draw_stylus(self):
+        cfg = self.app.core.config
+        life = max(1, cfg.get("stylus_life_hours") or 1000)
+        hours = stats.stylus_hours(self.app.core)
+        frac = min(1.0, hours / life)
+        self.stylus_lbl.config(text=f"Stylus: {hours:,.0f} of about {life:,} hours")
+        c, px = self.stylus_bar, self.app.px
+        c.delete("all")
+        w, h = c.winfo_width(), px(8)
+        if w < 20:
+            return
+        r = h / 2
+        c.create_line(r, r, w - r, r, width=h, capstyle="round", fill=LINE)
+        color = GOOD if frac < 0.75 else WARN if frac < 1 else BAD  # status colours: fine / soon / replace
+        if frac > 0:
+            c.create_line(r, r, max(r, r + (w - h) * frac), r, width=h, capstyle="round", fill=color)
+
+    # -- the shareable picture
+
+    def _make_image(self, then):
+        period = self.period.get()
+        self.share_lbl.config(text="Making the picture…", fg=FAINT)
+
+        def work():
+            try:
+                img = wrapped.make(self.app.core, period)
+            except Exception as e:
+                msg = str(e)
+                self.app.ui.put(lambda: self.share_lbl.config(text=f"Couldn't make it: {msg}", fg=BAD))
+                return
+            self.app.ui.put(lambda: self.win.winfo_exists() and then(img))
+        threading.Thread(target=work, daemon=True, name="wrapped").start()
+
+    def copy_image(self):
+        def done(img):
+            try:
+                wrapped.copy_to_clipboard(img)
+            except OSError as e:
+                self.share_lbl.config(text=str(e), fg=BAD)
+                return
+            self.share_lbl.config(text="Copied! Paste it in Discord with Ctrl+V", fg=ACCENT)
+        self._make_image(done)
+
+    def save_image(self):
+        def done(img):
+            path = filedialog.asksaveasfilename(parent=self.win, title="Save your Vinyl Wrapped",
+                                                defaultextension=".png", initialfile="Vinyl Wrapped.png",
+                                                filetypes=[("PNG image", "*.png")])
+            if path:
+                img.save(path)
+                self.share_lbl.config(text="Saved", fg=ACCENT)
+            else:
+                self.share_lbl.config(text="")
+        self._make_image(done)
 
     # -- chart: one series, so no legend; the title names it
 
