@@ -13,7 +13,6 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 import stats
 from core import ASSETS
 from metadata import USER_AGENT
-from version import GITHUB_REPO
 
 W, H, M = 1080, 1350, 80  # size and margin
 BG, PANEL = (18, 16, 20), (31, 28, 34)
@@ -71,11 +70,22 @@ def _hours(secs):
     return f"{h:.0f}" if h >= 10 else f"{h:.1f}"
 
 
+def _duration(secs):
+    minutes = round(secs / 60)
+    return f"{minutes // 60} h {minutes % 60:02d} min" if minutes >= 60 else f"{minutes} min"
+
+
 def make(core, period):
     """The picture for a stats period ("This month", "Last 30 days", "This year", "All time")."""
     data = stats.compute(core, period)
     img = Image.new("RGB", (W, H), BG)
     d = ImageDraw.Draw(img)
+    covers = {}
+
+    def cover(rid, size):
+        if (rid, size) not in covers:
+            covers[rid, size] = _cover(core, rid, size)
+        return covers[rid, size]
 
     # header: vinyl + title + period
     icon = Image.open(ASSETS / "vinyl.png").convert("RGBA").resize((84, 84), Image.LANCZOS)
@@ -84,51 +94,47 @@ def make(core, period):
     d.text((M + 110, M + 64), period_label(period), font=_font(32), fill=ACCENT)
 
     # the big number
-    y = 220
-    d.text((M - 6, y), _hours(data["seconds"]), font=_font(150, True), fill=ACCENT)
-    d.text((M, y + 178), "hours of vinyl", font=_font(36), fill=MUTED)
+    y = 196
+    d.text((M - 5, y), _hours(data["seconds"]), font=_font(128, True), fill=ACCENT)
+    d.text((M, y + 152), "hours of vinyl", font=_font(34), fill=MUTED)
 
     # three tiles
-    y = 490
+    y = 412
     top_artist = data["top_artists"][0][0] if data["top_artists"] else "–"
     tiles = [(str(data["sessions"]), "records played"), (str(data["records"]), "different records"),
              (top_artist, "top artist")]
     tile_w = (W - 2 * M - 2 * 24) // 3
     for i, (value, label) in enumerate(tiles):
         x = M + i * (tile_w + 24)
-        d.rounded_rectangle((x, y, x + tile_w, y + 140), radius=18, fill=PANEL)
-        big = _font(50 if len(value) <= 6 else 34, True)
-        d.text((x + 26, y + 22), _fit(d, value, big, tile_w - 52), font=big, fill=TEXT)
-        d.text((x + 26, y + 92), label, font=_font(26), fill=FAINT)
+        d.rounded_rectangle((x, y, x + tile_w, y + 122), radius=18, fill=PANEL)
+        big = _font(46 if len(value) <= 6 else 32, True)
+        d.text((x + 26, y + 18), _fit(d, value, big, tile_w - 52), font=big, fill=TEXT)
+        d.text((x + 26, y + 78), label, font=_font(24), fill=FAINT)
 
-    # most played records
-    y = 670
-    d.text((M, y), "MOST PLAYED", font=_font(26, True), fill=FAINT)
-    y += 44
-    title_f, artist_f, count_f = _font(36, True), _font(28), _font(30, True)
-    rows = data["top_records"][:4]
-    if not rows:
-        d.text((M, y + 10), "Nothing played in this period yet.", font=_font(32), fill=MUTED)
-    for rank, (rec, plays, _secs) in enumerate(rows, 1):
-        img.paste(_cover(core, rec["id"], 96), (M, y))
-        text_x = M + 124
-        count = f"{plays}×"
-        count_w = d.textlength(count, font=count_f)
-        d.text((text_x, y + 8), _fit(d, rec["title"], title_f, W - M - text_x - count_w - 30), font=title_f, fill=TEXT)
-        d.text((text_x, y + 54), _fit(d, rec["artist"], artist_f, W - M - text_x - count_w - 30), font=artist_f,
-               fill=MUTED)
-        d.text((W - M - count_w, y + 30), count, font=count_f, fill=ACCENT)
-        y += 112
+    # two top-3 lists: by plays, then by time listened
+    def top_list(y, heading, rows, value):
+        d.text((M, y), heading, font=_font(26, True), fill=FAINT)
+        y += 44
+        title_f, artist_f, value_f = _font(32, True), _font(26), _font(28, True)
+        for rec, plays, secs in rows:
+            img.paste(cover(rec["id"], 84), (M, y))
+            text_x = M + 108
+            label = value(plays, secs)
+            room = W - M - text_x - d.textlength(label, font=value_f) - 30
+            d.text((text_x, y + 2), _fit(d, rec["title"], title_f, room), font=title_f, fill=TEXT)
+            d.text((text_x, y + 46), _fit(d, rec["artist"], artist_f, room), font=artist_f, fill=MUTED)
+            d.text((W - M - d.textlength(label, font=value_f), y + 24), label, font=value_f, fill=ACCENT)
+            y += 100
 
-    # top artists
-    if data["top_artists"]:
-        y = 1172
-        names = "  ·  ".join(name for name, _p, _s in data["top_artists"][:3])
-        d.text((M, y), "TOP ARTISTS", font=_font(26, True), fill=FAINT)
-        d.text((M, y + 36), _fit(d, names, _font(30), W - 2 * M), font=_font(30), fill=TEXT)
+    if not data["top_records"]:
+        d.text((M, 590), "Nothing played in this period yet.", font=_font(32), fill=MUTED)
+    else:
+        top_list(570, "MOST PLAYED", data["top_records"][:3],
+                 lambda plays, _secs: "1 play" if plays == 1 else f"{plays} plays")
+        top_list(932, "MOST TIME LISTENED", data["top_time"][:3], lambda _plays, secs: _duration(secs))
 
     # footer
-    foot = f"Made with Vinyl Presence  ·  github.com/{GITHUB_REPO}" if GITHUB_REPO else "Made with Vinyl Presence"
+    foot = "Made with Vinyl Presence  ·  vinylhangout.com"
     f = _font(24)
     d.text(((W - d.textlength(foot, font=f)) / 2, H - 52), foot, font=f, fill=FAINT)
     return img

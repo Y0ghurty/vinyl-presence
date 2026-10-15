@@ -69,13 +69,16 @@ def compute(core, period):
             bucket[key] = (n + 1, s + secs)
     top_records = [(core.records[str(rid)], n, secs)
                    for rid, (n, secs) in sorted(records.items(), key=lambda kv: (-kv[1][0], -kv[1][1]))[:10]]
+    top_time = [(core.records[str(rid)], n, secs)
+                for rid, (n, secs) in sorted(records.items(), key=lambda kv: (-kv[1][1], -kv[1][0]))[:10]]
     top_artists = [(name, n, secs)
                    for name, (n, secs) in sorted(artists.items(), key=lambda kv: (-kv[1][0], -kv[1][1]))[:10]]
     return {
         "seconds": sum(s for _h, s in rows),  # every second counts, mis-clicks included
         "sessions": sum(n for n, _s in records.values()),
         "records": len(records),
-        "top_records": top_records,
+        "top_records": top_records,  # most played first
+        "top_time": top_time,  # most time listened first
         "top_artists": top_artists,
     }
 

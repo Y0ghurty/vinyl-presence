@@ -22,6 +22,7 @@ from tkinter import filedialog, messagebox, ttk
 
 import lastfm
 import server_bot
+import hangout
 import share
 import stats
 import tray
@@ -1219,6 +1220,24 @@ class VinylApp:
         self.count_lbl.config(text=f"Imported {count} records. Covers and track lengths load in the background.")
         return True
 
+    def _publish_page(self):
+        """Put the member page online now, and say whether it worked (a taken name, Discord not running, ...)."""
+        def work():
+            try:
+                problem = self.core.hangout.publish_page()
+            except OSError as e:
+                problem = f"Couldn't reach vinylhangout.com ({e}). It tries again by itself."
+            url = f"https://vinylhangout.com/u/{self.core.config['hangout_page_name']}"
+
+            def show():
+                if problem:
+                    messagebox.showerror("Member page", problem, parent=self.root)
+                elif messagebox.askyesno("Member page", f"Your page is online:\n{url}\n\nOpen it now?",
+                                         parent=self.root):
+                    webbrowser.open(url)
+            self.ui.put(show)
+        threading.Thread(target=work, daemon=True, name="member-page").start()
+
     def open_settings(self, start_tab=None):
         if self.settings and self.settings.winfo_exists():
             self.settings.lift()
@@ -1544,6 +1563,16 @@ class VinylApp:
         v_post = tk.BooleanVar(value=cfg["hangout_post"])
         check(f, "Post my records in the Vinyl Hangout Discord server (the now-spinning channel)", v_post, column=0)
         f.row += 1
+        v_page = tk.BooleanVar(value=cfg["hangout_page"])
+        check(f, "My member page: this month's stats, my top records and what I spun recently", v_page, column=0)
+        f.row += 1
+        v_page_name = tk.StringVar(value=cfg["hangout_page_name"]
+                                   or hangout.page_name_from(self.core.discord.status.get("user")))
+        page_error = self.core.hangout.page_error
+        label(f, "Page name", page_error or "Your page: vinylhangout.com/u/<page name>. Letters, numbers, - and _.",
+              hint_color=BAD if page_error else FAINT)
+        self.make_entry(f, v_page_name, width=24).grid(row=f.row, column=1, sticky="w", ipady=px(3))
+        f.row += 2
         v_count = tk.BooleanVar(value=cfg["hangout_count"])
         check(f, "Count me in the number of Vinyl Presence users (anonymous)", v_count, column=0)
         f.row += 1
@@ -1816,7 +1845,7 @@ class VinylApp:
         # What the settings were when the window opened (or last saved), to spot unsaved changes
         watched = [v_client, v_card, v_card_text, v_status, v_button, v_asset, v_user, v_token, v_auto, v_flip,
                    v_share, v_hook, v_tray, v_startup, v_bot, v_bot_token, v_lfm, v_tv, v_tv_device, v_tv_muted,
-                   v_tv_follow, v_own, v_sides, v_flip_remind, v_life, v_start, v_live, v_post, v_count]
+                   v_tv_follow, v_own, v_sides, v_flip_remind, v_life, v_start, v_live, v_post, v_page, v_page_name, v_count]
         baseline = {str(v): v.get() for v in watched}
 
         def close_settings():
@@ -1830,6 +1859,7 @@ class VinylApp:
             w.destroy()
 
         def save():
+            cfg_before_page = self.core.config["hangout_page_name"]
             client = v_client.get().strip() if v_own.get() else ""
             if v_own.get() and SHARED_APP_ID and not client:
                 tabs.select(0)
@@ -1845,6 +1875,12 @@ class VinylApp:
                 tabs.select(2)
                 messagebox.showerror("Settings", "To post what you play, paste the channel's webhook URL. It starts "
                                      "with https://discord.com/api/webhooks/", parent=w)
+                return
+            page_name = v_page_name.get().strip().lower()
+            if v_page.get() and not hangout.PAGE_NAME_RE.match(page_name):
+                tabs.select(2)
+                messagebox.showerror("Settings", "Pick a page name of 3 to 24 letters, numbers, - or _ "
+                                     "(it can't start or end with - or _), like yogurty.", parent=w)
                 return
             if v_bot.get() and not v_bot_token.get().strip():
                 tabs.select(3)
@@ -1878,7 +1914,10 @@ class VinylApp:
                 "tv_enabled": v_tv.get(), "tv_device": v_tv_device.get(), "tv_muted": v_tv_muted.get(),
                 "tv_follow": v_tv_follow.get(),
                 "hangout_live": v_live.get(), "hangout_post": v_post.get(), "hangout_count": v_count.get(),
+                "hangout_page": v_page.get(), "hangout_page_name": page_name,
             })
+            if v_page.get() and (page_name != cfg_before_page or not self.core.config["hangout_page_published"]):
+                self._publish_page()
             if v_startup.get() != tray.startup_enabled():
                 try:
                     tray.set_startup(v_startup.get())

@@ -96,6 +96,9 @@ DEFAULT_CONFIG = {
     "hangout_count": True,
     "hangout_live": False,
     "hangout_post": False,  # vinylhangout.com posts your records in the Vinyl Hangout Discord server
+    "hangout_page": False,  # a member page at vinylhangout.com/u/<hangout_page_name>
+    "hangout_page_name": "",
+    "hangout_page_published": False,  # so switching the page off removes it from the site, even after a restart
     "install_id": "",  # random, made on the first run; only identifies this install to the site
 }
 # The shared "Vinyl Presence" Discord application. Used when you haven't entered your own
