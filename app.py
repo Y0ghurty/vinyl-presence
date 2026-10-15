@@ -1310,7 +1310,7 @@ class VinylApp:
         v_client = tk.StringVar(value=cfg["discord_client_id"])
         v_own = tk.BooleanVar(value=bool(cfg["discord_client_id"]) or not SHARED_APP_ID)
         if SHARED_APP_ID:
-            for value, text in ((False, "Use the shared Vinyl Presence app: nothing to set up"),
+            for value, text in ((False, "Use the shared Record Player app: nothing to set up"),
                                 (True, "Use my own Discord application (the steps above)")):
                 tk.Radiobutton(f, text=text, variable=v_own, value=value, bg=BG, fg=TEXT, selectcolor=PANEL2,
                                activebackground=BG, activeforeground=TEXT, font=(FONT, 10), anchor="w",

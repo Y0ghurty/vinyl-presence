@@ -9,7 +9,7 @@ Pick the record you just put on in a small desktop window. Your Discord profile 
 cover, the track, the artist and a progress bar that moves through each side, so everyone can see you're
 spinning actual vinyl:
 
-> **Listening to My Record Player**
+> **Listening to Record Player**
 > Time
 > Pink Floyd
 > The Dark Side Of The Moon · Side A · on vinyl
@@ -45,24 +45,29 @@ Your settings, play history and cached covers are stored in `%APPDATA%\Vinyl Pre
 **Updates:** when a new version comes out, an **Update** button appears at the top of the app. One click
 downloads and installs it, and the app restarts by itself. If a record is playing, it keeps playing.
 
-## One-time setup (about 5 minutes)
+## Setup (about a minute)
 
-1. **Create a Discord application.** Discord uses it for Rich Presence. It is not a bot.
-   - Go to the [Discord Developer Portal](https://discord.com/developers/applications) → **New Application**.
-   - Its name is the title of your status ("Listening to *name*"). Make it say you're using a turntable,
-     like `My Record Player`.
-   - Copy the **Application ID** from *General Information*.
-2. **Upload the vinyl badge** (recommended). In your application, go to **Rich Presence → Art Assets**.
-   Scroll down to *Rich Presence Assets* (not the Invite Image), click **Add Image(s)**, upload
-   `vinyl.png`, name it `vinyl` and save. *Settings → Show vinyl.png* in the app shows you where the
-   file is. It puts a small record on the album cover ("Spinning on my turntable").
-3. **Your collection:** type your Discogs username in *Settings → Records* and it syncs by itself
-   (at startup and every 6 hours). Or export the CSV on Discogs (*Collection → Export*) and import it.
-4. **Start Vinyl Presence.** Settings opens on the first run. Paste the Application ID, click
-   *Import Discogs CSV…* and choose your export, then click **Save**. The dot in the top right turns
-   green: *Discord connected*.
-5. In Discord, make sure *User Settings → Activity Privacy → Share your detected activities with others*
+1. **Start Vinyl Presence** with the Discord desktop app running. The dot in the top right turns green:
+   *Discord connected*. There's nothing to set up for Discord: the app uses the shared **Record Player**
+   Discord application, vinyl badge included.
+2. **Your collection:** click **Use my Discogs username…** and type your Discogs username. Your collection
+   loads by itself (at startup and every 6 hours). Or export the CSV on Discogs (*Collection → Export*)
+   and click **Import CSV…**.
+3. In Discord, make sure *User Settings → Activity Privacy → Share your detected activities with others*
    is on.
+
+### Optional: your own Discord application
+
+Want your status to say something else than *Listening to Record Player*? Make your own application:
+
+1. Go to the [Discord Developer Portal](https://discord.com/developers/applications) → **New Application**.
+   Its name is the title of your status, like `Mark's Turntable`.
+2. Copy the **Application ID** from *General Information*.
+3. For the vinyl badge, go to **Rich Presence → Art Assets**. Scroll down to *Rich Presence Assets* (not
+   the Invite Image), click **Add Image(s)**, upload `vinyl.png`, name it `vinyl` and save.
+   *Settings → Discord → Show vinyl.png* shows you where the file is.
+4. In *Settings → Discord*, choose **Use my own Discord application**, paste the Application ID and click
+   **Save**.
 
 ## Using it
 
@@ -213,10 +218,12 @@ Found a bug? [Open an issue](https://github.com/Y0ghurty/vinyl-presence/issues).
 
 - **"Discord isn't running"**: start the Discord desktop app. The browser version of Discord can't show
   Rich Presence. The app reconnects by itself.
-- **"Discord rejected the Application ID"**: copy the *Application ID*, not the public key or the
-  client secret.
-- **No vinyl badge**: check that the image in *Rich Presence Assets* is named exactly `vinyl`. New images
-  can take a few minutes to work.
+- **Nothing shows on my profile**: check *Activity Privacy* (setup step 3), and that you're not set to
+  *Invisible*.
+- **"Discord rejected the Application ID"** (own application only): copy the *Application ID*, not the
+  public key or the client secret.
+- **No vinyl badge** (own application only): check that the image in *Rich Presence Assets* is named
+  exactly `vinyl`. New images can take a few minutes to work.
 - **Something else**: look in `data\log.txt` (in `%APPDATA%\Vinyl Presence` for the exe).
 
 ## License

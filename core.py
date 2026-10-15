@@ -91,7 +91,7 @@ DEFAULT_CONFIG = {
 }
 # The shared "Vinyl Presence" Discord application. Used when you haven't entered your own
 # Application ID, so new users can skip the Discord Developer Portal. Its ID is public, not a secret.
-SHARED_APP_ID = ""
+SHARED_APP_ID = "1560332027251794002"
 SIDE_END_CLEAR_MINUTES = 10
 SHARE_AFTER_SECONDS = 30  # a record must play this long before it's posted, so mis-clicks aren't
 STATUS_DISPLAY_TYPES = {"app": 0, "artist": 1, "title": 2}
