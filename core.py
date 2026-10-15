@@ -93,6 +93,7 @@ DEFAULT_CONFIG = {
     # vinylhangout.com: an anonymous daily "I'm here" for the user count, and (opt-in) the Live page
     "hangout_count": True,
     "hangout_live": False,
+    "hangout_post": False,  # vinylhangout.com posts your records in the Vinyl Hangout Discord server
     "install_id": "",  # random, made on the first run; only identifies this install to the site
 }
 # The shared "Vinyl Presence" Discord application. Used when you haven't entered your own

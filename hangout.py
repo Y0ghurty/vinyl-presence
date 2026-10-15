@@ -1,10 +1,12 @@
 """vinylhangout.com: the user count and the Live page.
 
-Two things, each with its own switch in Settings → Sharing & tray:
+Each with its own switch in Settings → Sharing & tray:
 - Count me (on by default): about once a day the app says "I'm here" with a random ID, so the site
   can count how many people use Vinyl Presence. Nothing else is sent.
 - Show me on the Live page (off by default): while a record plays, the site shows it with your
   Discord name and picture. It disappears when you stop.
+- Post my records in the Vinyl Hangout Discord (off by default): the site posts each record you put on
+  in the server's now-spinning channel, also when the server owner's PC is off.
 """
 import json
 import os
@@ -62,7 +64,8 @@ class Hangout:
         """What to show on the Live page right now, or None."""
         cfg, player = self.core.config, self.core.player
         name = self.core.discord.status.get("user") if self.core.discord.status.get("state") == "connected" else None
-        if not cfg.get("hangout_live") or not name:
+        live, post = bool(cfg.get("hangout_live")), bool(cfg.get("hangout_post"))
+        if not (live or post) or not name:
             return None
         with player.lock:
             n = player.now
@@ -71,12 +74,16 @@ class Hangout:
             rec, info = n["record"], n["info"]
             tracks = n["sides"].get(n["side"]) or []
             track = tracks[n["idx"]]["title"] if player._track_mode(n) else ""
-            key = (rec["id"], n["side"], track)
+            key = (rec["id"], n["side"], track, live, post)
+            fmt = rec.get("format") or ""
             payload = {
+                "live": live, "post": post,
                 "name": name, "avatar": self.core.discord.status.get("avatar") or "",
                 "release": int(rec["id"]), "title": rec["title"], "artist": rec["artist"], "year": rec.get("year") or "",
-                "cover": info.get("thumb") or info.get("cover") or "", "side": side_name(n["side"]) or "",
-                "track": track, "started": int(n["started"] / 1000),
+                "label": rec.get("label") or "", "format": fmt[7:] if fmt.startswith("Vinyl, ") else fmt,
+                "cover": info.get("thumb") or info.get("cover") or "",  # small, for the Live page
+                "image": info.get("cover") or info.get("thumb") or "",  # big, for the Discord post
+                "side": side_name(n["side"]) or "", "track": track, "started": int(n["started"] / 1000),
             }
         return key, payload
 

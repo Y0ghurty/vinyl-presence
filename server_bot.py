@@ -166,6 +166,18 @@ class NowSpinningBot(discord.Client if discord else object):
                 "Now-spinning records will be posted in this channel. Members join in with /nowspinning on.",
                 ephemeral=True)
 
+        @group.command(name="channel-off", description="Admins: stop posting now-spinning records (the role keeps working)")
+        @app_commands.default_permissions(manage_guild=True)
+        async def channel_off(interaction: discord.Interaction):
+            if await self._not_in_server(interaction):
+                return
+            g = self.store.guild(interaction.guild_id)
+            g["channel"] = None
+            self.store.save()
+            await interaction.response.send_message(
+                "I won't post now-spinning records anymore. The role keeps working. "
+                "Type /nowspinning channel in a channel to start again.", ephemeral=True)
+
         @group.command(name="role", description="Admins: give a role to everyone who uses Vinyl Presence")
         @app_commands.describe(role="The role to give (leave empty to stop giving one)")
         @app_commands.default_permissions(manage_guild=True)
