@@ -121,7 +121,11 @@ class Hangout:
         if key == self._sent and (not key or time.time() - self._sent_at < HEARTBEAT_SECONDS):
             return
         if now:
+            started = time.time()
             _post("spin.php", {"id": self.core.config["install_id"], "action": "play", **now[1]})
+            r = now[1]
+            print(f"[hangout] {time.strftime('%H:%M:%S')} sent {r['artist']} - {r['title']} "
+                  f"({' · '.join(x for x in (r['side'], r['track']) if x)}) in {time.time() - started:.1f} s")
         else:
             _post("spin.php", {"id": self.core.config["install_id"], "action": "stop"})
         self._sent, self._sent_at = key, time.time()
@@ -160,7 +164,9 @@ class Hangout:
                        "avatar": key[2] or "", **self._snapshot()}
             self._page_key, self._page_at = key, time.time()  # a refused name isn't retried until something changes
             try:
+                started = time.time()
                 _post("profile.php", payload)
+                print(f"[hangout] {time.strftime('%H:%M:%S')} member page updated in {time.time() - started:.1f} s")
             except urllib.error.HTTPError as e:
                 self.page_error = _error(e)
                 print(f"[hangout] member page refused: {self.page_error}")

@@ -1,9 +1,9 @@
 """Listening stats ("Vinyl Wrapped") from the play history.
 
 Each history entry is one listening session of a record: {"id", "at", "secs"}.
-Sessions from before listening time was tracked have no "secs"; for those the
-album's running time is used, but never longer than the time until the next
-session started. Playing the same record again right after itself counts as one
+Sessions without a measured time ("secs": from before it was tracked, or just
+started) use the album's running time, but never longer than until the next
+session started, or until now for the one that's playing. Playing the same record again right after itself counts as one
 play, however long the break, and anything shorter than a minute (a mis-click)
 doesn't count as a play.
 """
@@ -37,9 +37,10 @@ def sessions(core):
     for i, h in enumerate(hist):
         secs = h.get("secs")
         if secs is None:
-            secs = _album_seconds(core, h["id"])
-            if i > 0:
-                secs = min(secs, max(0, hist[i - 1]["at"] - h["at"]))
+            # Not measured yet (or the app closed before it could save): the album's running time, but never
+            # longer than until the next session started, or until now for the one that's playing.
+            until = hist[i - 1]["at"] if i > 0 else time.time()
+            secs = min(_album_seconds(core, h["id"]), max(0, until - h["at"]))
         out.append((h, secs))
     out.reverse()
     return out
