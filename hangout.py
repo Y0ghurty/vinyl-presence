@@ -9,6 +9,8 @@ Each with its own switch in Settings → Sharing & tray:
   in the server's now-spinning channel, also when the server owner's PC is off.
 - My member page (off by default): vinylhangout.com/u/<page name> shows your Discord name and picture,
   this month's listening stats, your top records and artists, and what you spun recently.
+- Want-list matches (off by default): your collection (release numbers) and your Discogs want list, so members
+  see who in the Hangout has a record they're looking for, and who's looking for one you have.
 """
 import json
 import os
@@ -18,8 +20,9 @@ import time
 import urllib.error
 import urllib.request
 
+import achievements
 import stats
-from metadata import USER_AGENT, side_name
+from metadata import USER_AGENT, RateLimited, fetch_wantlist, side_name
 from version import VERSION
 
 API = os.environ.get("VINYL_HANGOUT_API", "https://vinylhangout.com/api")
@@ -28,6 +31,7 @@ LIVE_AFTER_SECONDS = 20   # a mis-click never shows up
 HEARTBEAT_SECONDS = 240   # the site drops a record after 10 minutes without news
 RETRY_SECONDS = 120       # when the site can't be reached
 PAGE_EVERY = 3600         # the member page is refreshed at least this often (and whenever a record starts)
+SHELF_EVERY = 6 * 3600   # the want list is fetched again, and the shelf resent, this often
 PAGE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{1,22}[a-z0-9]$")
 
 
@@ -66,7 +70,32 @@ class Hangout:
         self._page_lock = threading.Lock()
         self.page_error = None  # why the site refused the page, e.g. a taken name
         self.wake = threading.Event()
+        self.page_wake = threading.Event()
+        self.shelf_wake = threading.Event()
+        self.wants = None  # your Discogs want list, once fetched
+        self._wants_for, self._wants_at = None, 0
+        self._shelf_key, self._shelf_at = None, 0
         threading.Thread(target=self._loop, daemon=True, name="hangout").start()
+        threading.Thread(target=self._shelf_loop, daemon=True, name="want-list").start()
+        # The member page has its own thread, so making it can never hold up reporting a record
+        threading.Thread(target=self._page_loop, daemon=True, name="member-page").start()
+
+    def poke(self):
+        """Settings changed: check right away instead of at the next tick."""
+        self.wake.set()
+        self.page_wake.set()
+        self.shelf_wake.set()
+
+    def _page_loop(self):
+        time.sleep(15)
+        while True:
+            try:
+                self._page()
+            except (OSError, ValueError) as e:
+                print(f"[hangout] member page: {e}")
+                self.page_wake.wait(RETRY_SECONDS)
+            self.page_wake.wait(10)
+            self.page_wake.clear()
 
     def _loop(self):
         time.sleep(10)  # let the app start first
@@ -75,7 +104,6 @@ class Hangout:
                 try:
                     self._hello()
                     self._live()
-                    self._page()
                 except (OSError, ValueError) as e:
                     print(f"[hangout] {e}")
                     self._retry_at = time.time() + RETRY_SECONDS
@@ -205,7 +233,54 @@ class Hangout:
                 "most_time": [entry(r, n, s) for r, n, s in month["top_time"][:5]],
             },
             "recent": recent,
+            "achievements": achievements.for_page(core),
+            "achievements_total": len(achievements.CATALOG),
         }
+
+    # -- want-list matches
+
+    def _shelf_loop(self):
+        time.sleep(20)
+        while True:
+            try:
+                self._shelf()
+            except (OSError, ValueError, RateLimited) as e:
+                print(f"[hangout] want list: {e}")
+                self.shelf_wake.wait(600)
+            self.shelf_wake.wait(600)
+            self.shelf_wake.clear()
+
+    def _shelf(self):
+        cfg, core = self.core.config, self.core
+        user = cfg.get("discogs_username", "").strip()
+        status = core.discord.status
+        if not (cfg.get("hangout_matches") and user):
+            if cfg.get("hangout_matches_published"):
+                _post("shelf.php", {"id": cfg["install_id"], "action": "delete"})
+                core.update_config({"hangout_matches_published": False})
+                print("[hangout] want list removed from vinylhangout.com")
+            return
+        if status.get("state") != "connected" or not status.get("user"):
+            return  # the name shown to other members comes from Discord
+        if user != self._wants_for or time.time() - self._wants_at >= SHELF_EVERY:
+            while core.library.pending():  # record info first: they share Discogs' rate limit
+                time.sleep(10)
+            self.wants = fetch_wantlist(user, cfg.get("discogs_token", "").strip() or None)
+            self._wants_for, self._wants_at = user, time.time()
+        key = (core.collection_version, user, len(self.wants), status["user"], status.get("id"))
+        if key == self._shelf_key and time.time() - self._shelf_at < SHELF_EVERY:
+            return
+        have = [{"r": int(r["id"]), "m": int(r.get("master") or 0)} for r in list(core.records.values())]
+        _post("shelf.php", {"id": cfg["install_id"], "name": status["user"], "discord_id": status.get("id") or "",
+                            "have": have, "want": self.wants})
+        self._shelf_key, self._shelf_at = key, time.time()
+        print(f"[hangout] {time.strftime('%H:%M:%S')} shared {len(have)} records and {len(self.wants)} wants for matches")
+        if not cfg.get("hangout_matches_published"):
+            core.update_config({"hangout_matches_published": True})
+
+    def matches(self):
+        """Your matches from vinylhangout.com: {"want_owned", "have_wanted", "members"}. Raises OSError offline."""
+        return _post("matches.php", {"id": self.core.config["install_id"]})
 
     def stop(self):
         """Take us off the Live page right away (the app is closing)."""

@@ -140,6 +140,22 @@ def fetch_discogs(release_id, token=None):
     }
 
 
+def fetch_price(release_id, currency, token=None):
+    """The lowest price a release is for sale at on Discogs right now: (price or None, copies for sale)."""
+    headers = {"Authorization": f"Discogs token={token}"} if token else {}
+    d = _get_json(f"{DISCOGS}/marketplace/stats/{release_id}?curr_abbr={currency}", headers)
+    lowest = d.get("lowest_price") or {}
+    price = lowest.get("value") if lowest.get("currency") == currency else None
+    return (float(price) if price is not None else None), int(d.get("num_for_sale") or 0)
+
+
+def fetch_collection_value(username, token):
+    """Discogs' own estimate of a collection: {"minimum", "median", "maximum"} as text like "€1,234.00".
+    Only works with the owner's personal access token."""
+    return _get_json(f"{DISCOGS}/users/{urllib.parse.quote(username)}/collection/value",
+                     {"Authorization": f"Discogs token={token}"})
+
+
 class CollectionError(Exception):
     """A message that can be shown to the user as is."""
 
@@ -185,6 +201,7 @@ def fetch_collection(username, token=None, progress=None):
                                  for f in b.get("formats") or [])
             records[rid] = {
                 "id": int(rid),
+                "master": b.get("master_id") or 0,  # the album, across all its pressings
                 "artist": _artist_names(b.get("artists")),
                 "title": (b.get("title") or "").strip(),
                 "label": clean_name(labels[0].get("name")),
@@ -203,6 +220,26 @@ def fetch_collection(username, token=None, progress=None):
         if page <= pages:
             time.sleep(1.1 if token else 2.5)  # Discogs allows 60 requests/min with a token, 25 without
     return list(records.values())
+
+
+def fetch_wantlist(username, token=None):
+    """A Discogs user's want list: [{"r": release, "m": master, "title", "artist", "cover"}].
+    Public want lists need only the username; a private one needs that user's own token."""
+    headers = {"Authorization": f"Discogs token={token}"} if token else {}
+    user = urllib.parse.quote(username.strip())
+    wants, page, pages = [], 1, 1
+    while page <= pages:
+        data = _get_json(f"{DISCOGS}/users/{user}/wants?per_page=100&page={page}", headers, timeout=20)
+        pages = (data.get("pagination") or {}).get("pages") or 1
+        for item in data.get("wants") or []:
+            b = item.get("basic_information") or {}
+            if b.get("id"):
+                wants.append({"r": int(b["id"]), "m": b.get("master_id") or 0, "title": (b.get("title") or "").strip(),
+                              "artist": _artist_names(b.get("artists")), "cover": b.get("thumb") or b.get("cover_image") or ""})
+        page += 1
+        if page <= pages:
+            time.sleep(1.1 if token else 2.5)
+    return wants
 
 
 def fetch_deezer(artist, title):

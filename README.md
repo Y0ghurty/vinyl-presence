@@ -1,7 +1,7 @@
 # Vinyl Presence
 
 [![Download](https://img.shields.io/github/v/release/Y0ghurty/vinyl-presence?label=Download&color=ef7a3c)](https://github.com/Y0ghurty/vinyl-presence/releases/latest)
-[![Discord](https://img.shields.io/badge/Discord-Vinyl%20Hangout-5865F2?logo=discord&logoColor=white)](https://discord.gg/xHj9Td7MYz)
+[![Discord](https://img.shields.io/badge/Discord-Vinyl%20Hangout-5865F2?logo=discord&logoColor=white)](https://discord.gg/vinylhangout)
 
 Spotify-style Discord status for the records on your real turntable.
 
@@ -33,7 +33,12 @@ spinning actual vinyl:
   server owner, run a bot that posts what all your members play.
 - **Live page:** optionally show what you're spinning on [vinylhangout.com](https://vinylhangout.com/#live),
   next to everyone else who's playing a record right now, post it in the Vinyl Hangout Discord, and get your own
-  member page with your stats.
+  member page with your stats and achievements.
+- **Collection value:** optionally see what your collection is worth on the Discogs marketplace, and which
+  records are your most valuable.
+- **Achievements:** 28 badges to earn, from *First drop* to *Vinyl legend*, with your progress in *Stats*.
+- **Want list:** optionally see who in Vinyl Hangout has a record from your Discogs want list, and who's
+  looking for one you have.
 - **Stays out of the way:** it runs in the tray next to the clock and can start with Windows.
 - **A normal Windows app:** nothing to host, no account, no server.
 
@@ -109,7 +114,10 @@ aren't, it shows the album with an elapsed timer.
 | Flip reminder | A Windows notification when a side ends |
 | Stylus | Its lifespan (about 1,000 hours is typical) and the hours it already had; **I fitted a new stylus** starts over. *Stats* shows the wear, with a reminder at 90% and 100% |
 | Import Discogs CSV | Load a newer export after you buy records |
+| Collection value | Off by default. Looks up what each record sells for on Discogs (slowly, in the background, refreshed weekly) and shows the total in *Stats*, with **Most valuable…** and the price in a record's details. Pick the currency next to it |
 | Post what I play | Posts each record you play (after 30 seconds) to a Discord channel through its webhook URL |
+| Want-list matches | Off by default. Shares your collection and Discogs want list with the Vinyl Hangout members who switched it on too; **Want list** (top of the app) shows the matches |
+| Live page, member page | *Settings → Sharing & tray*, all off by default: show what you play on vinylhangout.com, post it in the Vinyl Hangout Discord, and your own page at vinylhangout.com/u/*name*, with a **My Vinyl Hangout page** button on your status |
 | Keep running in the tray | Closing the window hides it to the tray instead of quitting |
 | Last.fm | **Connect Last.fm** opens last.fm to approve the app; after that, tracks are scrobbled once they've played for half their length or 4 minutes |
 | TV | Your Chromecast, whether videos play muted (the record is the music), and **Follow along** to switch videos with the record. While a video plays, **−1s / +1s** fine-tune only the TV, remembered per video |
@@ -166,9 +174,16 @@ with Windows).
   same details go to vinylhangout.com, which posts each record you put on in the server's now-spinning channel.
 - **Member page:** only if you switch on *My member page*: your Discord name and picture, this month's listening
   stats (hours, plays, top records and artists), your total hours, how many records you have, and your 12 most
-  recent records. Anyone can see it at vinylhangout.com/u/*your page name*. Switch it off and it's removed.
+  recent records and your achievements. Anyone can see it at vinylhangout.com/u/*your page name*. Switch it
+  off and it's removed.
+- **Want-list matches:** only if you switch on *Want-list matches*: your collection's release numbers and your
+  Discogs want list (titles and covers), with your Discord name and user ID, so matching members see who has or
+  wants what, and a record for sale in the Vinyl Hangout server can mention you. Switch it off and it's removed.
+- **Discogs marketplace:** only if you switch on *Collection value*: each record's release number, to look up
+  its lowest price on Discogs (once a week). With a Discogs token, also Discogs' estimate of your collection.
 
-Your collection, history and stats never leave your PC.
+Apart from what's listed here, and only what you've switched on, your collection, history and stats stay on
+your PC.
 
 ## Run from source
 
@@ -222,7 +237,7 @@ latest release.
 
 ## Need help?
 
-Join **[Vinyl Hangout](https://discord.gg/xHj9Td7MYz)** on Discord for questions, setup help or ideas, or
+Join **[Vinyl Hangout](https://discord.gg/vinylhangout)** on Discord for questions, setup help or ideas, or
 just to share what's on your turntable. You can also click **Help** in the app to get there.
 
 Found a bug? [Open an issue](https://github.com/Y0ghurty/vinyl-presence/issues).
@@ -238,6 +253,27 @@ Found a bug? [Open an issue](https://github.com/Y0ghurty/vinyl-presence/issues).
 - **No vinyl badge** (own application only): check that the image in *Rich Presence Assets* is named
   exactly `vinyl`. New images can take a few minutes to work.
 - **Something else**: look in `data\log.txt` (in `%APPDATA%\Vinyl Presence` for the exe).
+
+## Uninstall
+
+1. If you made a member page, switch it off first (*Settings → Sharing & tray*) so it's removed from
+   vinylhangout.com. Untick **Start Vinyl Presence when Windows starts** there too.
+2. Quit Vinyl Presence (right-click the tray icon → **Quit**) and delete `VinylPresence.exe`.
+3. Delete the folder `%APPDATA%\Vinyl Presence` (your settings, history and cached covers).
+
+## Code signing policy
+
+Windows releases are built from the source code in this repository by GitHub Actions (see the
+[release workflow](.github/workflows/release.yml)), and every release is approved by hand before it's signed.
+
+Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by
+[SignPath Foundation](https://signpath.org/). *We've applied; until that's approved, releases are unsigned.*
+
+- **Committers and reviewers:** [Y0ghurty](https://github.com/Y0ghurty)
+- **Approvers:** [Y0ghurty](https://github.com/Y0ghurty)
+
+**Privacy policy:** Vinyl Presence only sends information to other computers as described in
+[What goes online](#what-goes-online).
 
 ## License
 

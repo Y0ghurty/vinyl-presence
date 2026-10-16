@@ -46,17 +46,23 @@ def sessions(core):
     return out
 
 
-def plays(rows):
-    """Group sessions into plays: [(record id, seconds)]. The same record twice in a row is one play; < 1 minute isn't one."""
-    grouped = []  # [record id, seconds]
+def timed_plays(rows):
+    """Group sessions into plays: [(record id, started, seconds)], oldest first.
+    The same record twice in a row is one play; < 1 minute isn't one."""
+    grouped = []  # [record id, started, seconds]
     for h, secs in rows:
         if secs < MIN_PLAY_SECONDS:
             continue
         if grouped and grouped[-1][0] == h["id"]:
-            grouped[-1][1] += secs
+            grouped[-1][2] += secs
         else:
-            grouped.append([h["id"], secs])
-    return [(rid, secs) for rid, secs in grouped]
+            grouped.append([h["id"], h["at"], secs])
+    return [tuple(g) for g in grouped]
+
+
+def plays(rows):
+    """Like timed_plays(), without when: [(record id, seconds)]."""
+    return [(rid, secs) for rid, _at, secs in timed_plays(rows)]
 
 
 def compute(core, period):

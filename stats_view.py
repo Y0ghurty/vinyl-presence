@@ -1,9 +1,14 @@
 """The stats window: hours listened, most played records and artists, hours per month."""
+import os
 import threading
+import time
+import webbrowser
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
+import achievements
 import stats
+import value as collection_value
 from covers import ThumbCache
 from theme import ACCENT, BAD, BG, CHART, FAINT, FONT, GOOD, LINE, MUTED, PANEL, PANEL2, TEXT, WARN
 
@@ -42,6 +47,7 @@ class StatsWindow:
         self.period.set(stats.PERIODS[0])
         self.period.pack(side="right")
         self.period.bind("<<ComboboxSelected>>", lambda e: self.render())
+        app.btn(head, "Achievements", self.show_achievements, size=9).pack(side="right", padx=(0, px(8)))
         if wrapped:
             app.btn(head, "Save image…", self.save_image, size=9).pack(side="right", padx=(0, px(8)))
             app.btn(head, "Copy image", self.copy_image, kind="accent", size=9).pack(side="right", padx=(0, px(6)))
@@ -61,11 +67,21 @@ class StatsWindow:
         self.stylus_bar.pack(side="left", fill="x", expand=True, padx=(0, px(16)))
         self.stylus_bar.bind("<Configure>", lambda e: self.draw_stylus())
 
+        # what the collection is worth (only when switched on in Settings → Records)
+        self.value_box = tk.Frame(pad, bg=PANEL)
+        if app.core.config.get("value_enabled"):
+            self.value_box.pack(fill="x", pady=(px(14), 0))
+            self.value_lbl = tk.Label(self.value_box, bg=PANEL, fg=TEXT, font=(FONT, 10), anchor="w", justify="left")
+            self.value_lbl.pack(side="left", padx=(px(16), px(12)), pady=px(10))
+            app.btn(self.value_box, "Most valuable…", self.show_valuable, size=9).pack(side="right", padx=px(12))
+            self.render_value()
+
         chart_box = tk.Frame(pad, bg=PANEL)
         chart_box.pack(fill="x", pady=(px(14), 0))
         tk.Label(chart_box, text="Hours per month", bg=PANEL, fg=MUTED, font=(FONT, 9, "bold"),
                  anchor="w").pack(fill="x", padx=px(16), pady=(px(12), 0))
-        self.chart = tk.Canvas(chart_box, height=px(170), bg=PANEL, highlightthickness=0)
+        chart_h = px(120) if app.core.config.get("value_enabled") else px(170)  # room for the value strip
+        self.chart = tk.Canvas(chart_box, height=chart_h, bg=PANEL, highlightthickness=0)
         self.chart.pack(fill="x", padx=px(16), pady=(px(4), px(12)))
         self.chart.bind("<Configure>", lambda e: self.draw_chart())
 
@@ -78,8 +94,10 @@ class StatsWindow:
 
         self.render()
         w.update_idletasks()
-        x = app.root.winfo_rootx() + (app.root.winfo_width() - w.winfo_width()) // 2
-        w.geometry(f"+{max(0, x)}+{max(0, app.root.winfo_rooty() + px(30))}")
+        h = min(w.winfo_reqheight(), w.winfo_screenheight() - px(130))  # never taller than the screen
+        x = app.root.winfo_rootx() + (app.root.winfo_width() - w.winfo_reqwidth()) // 2
+        y = min(app.root.winfo_rooty() + px(30), w.winfo_screenheight() - h - px(100))
+        w.geometry(f"{w.winfo_reqwidth()}x{h}+{max(0, x)}+{max(0, y)}")
 
     def _panel(self, parent, title, col):
         px = self.app.px
@@ -104,7 +122,7 @@ class StatsWindow:
                  (top_artist, "top artist")]
         for i, (value, label) in enumerate(tiles):
             self._tile(i, value, label)
-        self._fill_records(data["top_records"])
+        self._fill_records(data["top_records"][:8] if self.app.core.config.get("value_enabled") else data["top_records"])
         self._fill_artists(data["top_artists"])
         self.months = stats.months(self.app.core)
         self.draw_chart()
@@ -164,6 +182,157 @@ class StatsWindow:
             tk.Label(row, text=name, bg=PANEL, fg=TEXT, font=(FONT, 10), anchor="w").pack(side="left", fill="x",
                                                                                           expand=True)
             tk.Label(row, text=f"{plays}× · {fmt_hours(secs)}", bg=PANEL, fg=MUTED, font=(FONT, 9)).pack(side="right")
+
+    # -- achievements
+
+    def _emoji(self, char, size, dim=False):
+        """A color emoji as a Tk image (None without Pillow or the Windows emoji font)."""
+        key = (char, size, dim)
+        cache = self.__dict__.setdefault("_emojis", {})
+        if key not in cache:
+            try:
+                from PIL import Image, ImageDraw, ImageFont, ImageTk
+                font = ImageFont.truetype(os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts", "seguiemj.ttf"),
+                                          size * 2)
+                img = Image.new("RGBA", (size * 3, size * 3), (0, 0, 0, 0))
+                ImageDraw.Draw(img).text((size // 2, size // 4), char, font=font, embedded_color=True)
+                img = img.crop(img.getbbox() or (0, 0, 1, 1))
+                img.thumbnail((size, size), Image.LANCZOS)
+                if dim:  # not earned yet: grey and faded
+                    alpha = img.getchannel("A").point(lambda a: a * 45 // 100)
+                    img = img.convert("LA").convert("RGBA")
+                    img.putalpha(alpha)
+                cache[key] = ImageTk.PhotoImage(img)
+            except (ImportError, OSError, ValueError):
+                cache[key] = None
+        return cache[key]
+
+    def show_achievements(self):
+        px = self.app.px
+        items = achievements.progress(self.app.core)
+        earned = sorted((a for a in items if a["at"]), key=lambda a: -a["at"])
+        todo = sorted((a for a in items if not a["at"]),
+                      key=lambda a: -(a["have"] / a["goal"]) if a["goal"] else 1)
+        w = tk.Toplevel(self.win, bg=BG)
+        w.title("Achievements")
+        w.transient(self.win)
+        w.bind("<Escape>", lambda e: w.destroy())
+        head = tk.Frame(w, bg=BG)
+        head.pack(fill="x", padx=px(20), pady=(px(16), px(10)))
+        tk.Label(head, text="Achievements", bg=BG, fg=TEXT, font=(FONT, 14, "bold")).pack(side="left")
+        tk.Label(head, text=f"{len(earned)} of {len(items)} earned", bg=BG, fg=MUTED, font=(FONT, 10)).pack(
+            side="left", padx=(px(10), 0), pady=(px(4), 0))
+
+        box = tk.Frame(w, bg=BG)
+        box.pack(fill="both", expand=True, padx=(px(20), px(8)), pady=(0, px(16)))
+        canvas = tk.Canvas(box, bg=BG, highlightthickness=0)
+        bar = ttk.Scrollbar(box, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=bar.set)
+        bar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        grid = tk.Frame(canvas, bg=BG)
+        canvas.create_window((0, 0), window=grid, anchor="nw")
+        grid.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        w.bind("<MouseWheel>", lambda e: canvas.yview_scroll(-e.delta // 120, "units"))
+        for col in (0, 1):
+            grid.columnconfigure(col, weight=1, uniform="badge")
+
+        for i, a in enumerate(earned + todo):
+            card = tk.Frame(grid, bg=PANEL)
+            card.grid(row=i // 2, column=i % 2, sticky="nsew", padx=(0, px(10)), pady=(0, px(10)))
+            icon = self._emoji(a["icon"], px(30), dim=not a["at"])
+            tk.Label(card, image=icon, text="" if icon else a["icon"], bg=PANEL, fg=TEXT, font=(FONT, 18),
+                     width=px(40) if icon else 3).pack(side="left", padx=(px(12), px(10)), pady=px(12))
+            text = tk.Frame(card, bg=PANEL)
+            text.pack(side="left", fill="x", expand=True, pady=px(10), padx=(0, px(12)))
+            tk.Label(text, text=a["name"], bg=PANEL, fg=TEXT if a["at"] else MUTED, font=(FONT, 10, "bold"),
+                     anchor="w").pack(fill="x")
+            tk.Label(text, text=a["desc"], bg=PANEL, fg=MUTED if a["at"] else FAINT, font=(FONT, 9), anchor="w",
+                     justify="left", wraplength=px(230)).pack(fill="x")
+            if a["at"]:
+                when = time.strftime("%d %B %Y", time.localtime(a["at"])).lstrip("0")
+                tk.Label(text, text=f"Earned {when}", bg=PANEL, fg=ACCENT, font=(FONT, 8), anchor="w").pack(fill="x")
+            elif a["goal"]:
+                row = tk.Frame(text, bg=PANEL)
+                row.pack(fill="x", pady=(px(3), 0))
+                meter = tk.Canvas(row, width=px(110), height=px(6), bg=PANEL, highlightthickness=0)
+                meter.pack(side="left")
+                r = px(3)
+                meter.create_line(r, r, px(110) - r, r, width=px(6), capstyle="round", fill=LINE)
+                frac = min(1.0, a["have"] / a["goal"])
+                if frac > 0:
+                    meter.create_line(r, r, r + (px(110) - 2 * r) * frac, r, width=px(6), capstyle="round", fill=ACCENT)
+                tk.Label(row, text=f"{a['have']:,.0f} / {a['goal']:,}", bg=PANEL, fg=FAINT, font=(FONT, 8)).pack(
+                    side="left", padx=(px(8), 0))
+        w.update_idletasks()
+        width = grid.winfo_reqwidth() + px(50)
+        canvas.configure(width=grid.winfo_reqwidth())
+        w.geometry(f"{width}x{min(w.winfo_screenheight() - px(160), grid.winfo_reqheight() + px(80))}")
+
+    # -- collection value
+
+    def render_value(self):
+        if not self.win.winfo_exists():
+            return
+        s = self.app.core.value.summary()
+        cur = s["currency"]
+        if s["priced"]:
+            text = f"Your collection is worth about {collection_value.money(s['total'], cur)}"
+            detail = f"{s['priced']} of {s['records']} records are for sale on Discogs; this adds up their lowest prices."
+        else:
+            text = "Your collection's value"
+            detail = "Looking up prices on Discogs. The first time takes a while."
+        if s["busy"] and s["priced"]:
+            detail += f" Still looking up: {s['looked_up']} of {s['records']} done."
+        if s["estimate"]:
+            e = s["estimate"]
+            detail += f"\nDiscogs' own estimate: {e.get('minimum')} to {e.get('maximum')} (median {e.get('median')})."
+        self.value_lbl.config(text=f"{text}\n{detail}")
+        self.win.after(5000 if s["busy"] or not s["looked_up"] else 60000, self.render_value)
+
+    def show_valuable(self):
+        px, core = self.app.px, self.app.core
+        s = core.value.summary()
+        w = tk.Toplevel(self.win, bg=BG)
+        w.title("Most valuable records")
+        w.transient(self.win)
+        w.bind("<Escape>", lambda e: w.destroy())
+        pad = tk.Frame(w, bg=BG)
+        pad.pack(fill="both", expand=True, padx=px(20), pady=px(16))
+        tk.Label(pad, text="Most valuable records", bg=BG, fg=TEXT, font=(FONT, 14, "bold"), anchor="w").pack(fill="x")
+        tk.Label(pad, text="The lowest price each record is for sale at on Discogs right now. Prices are refreshed "
+                           "every week. Click a record to see it for sale.", bg=BG, fg=MUTED, font=(FONT, 9),
+                 anchor="w", justify="left", wraplength=px(460)).pack(fill="x", pady=(px(2), px(10)))
+        body = tk.Frame(pad, bg=PANEL)
+        body.pack(fill="both", expand=True)
+        if not s["top"]:
+            tk.Label(body, text="No prices yet. Give it a few minutes.", bg=PANEL, fg=FAINT, font=(FONT, 10)).pack(
+                padx=px(16), pady=px(16))
+        arts = {}
+
+        def cover_ready(rid):
+            if rid in arts and arts[rid].winfo_exists():
+                arts[rid].config(image=self.thumbs.images[rid])
+
+        for rank, (rec, price, for_sale) in enumerate(s["top"][:10], 1):
+            row = tk.Frame(body, bg=PANEL, cursor="hand2")
+            row.pack(fill="x", padx=px(12), pady=px(3))
+            tk.Label(row, text=str(rank), bg=PANEL, fg=FAINT, font=(FONT, 9), width=3, anchor="w").pack(side="left")
+            art = arts[rec["id"]] = tk.Label(row, bg=PANEL, image=self.thumbs.get(rec["id"], cover_ready)
+                                             or self.thumbs.placeholder or "")
+            art.pack(side="left", padx=(0, px(10)))
+            # the price first, so a long title is cut off instead of the price
+            tk.Label(row, text=f"{collection_value.money(price, s['currency'])}\n{for_sale} for sale", bg=PANEL,
+                     fg=ACCENT, font=(FONT, 10, "bold"), justify="right").pack(side="right", padx=(px(10), 0))
+            text = tk.Frame(row, bg=PANEL)
+            text.pack(side="left", fill="x", expand=True)
+            tk.Label(text, text=rec["title"], bg=PANEL, fg=TEXT, font=(FONT, 10, "bold"), anchor="w").pack(fill="x")
+            tk.Label(text, text=rec["artist"], bg=PANEL, fg=MUTED, font=(FONT, 9), anchor="w").pack(fill="x")
+            url = f"https://www.discogs.com/sell/release/{rec['id']}"
+            for widget in (row, art, text, *text.winfo_children()):
+                widget.bind("<Button-1>", lambda e, url=url: webbrowser.open(url))
+        w.update_idletasks()
+        w.geometry(f"{px(560)}x{min(w.winfo_screenheight() - px(120), w.winfo_reqheight())}")
 
     # -- stylus wear
 

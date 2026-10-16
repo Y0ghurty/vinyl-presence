@@ -42,15 +42,17 @@ class ThumbCache:
             for _ in range(4):
                 threading.Thread(target=self._worker, daemon=True, name="thumbs").start()
 
-    def get(self, rid, callback=None):
-        """The image if it's loaded; otherwise start loading it and call callback(rid) when it is."""
+    def get(self, rid, callback=None, url=None):
+        """The image if it's loaded; otherwise start loading it and call callback(rid) when it is.
+        url: the cover to use for a record that isn't in the collection (a want-list record, say)."""
         if rid in self.images:
             self.images.move_to_end(rid)
             return self.images[rid]
         if not Image or rid in self.failed:
             return None
-        info = self.app.core.library.get_cached(rid) or {}
-        url = (info.get("thumb") if self.size <= 150 else None) or info.get("cover") or info.get("thumb")
+        if not url:
+            info = self.app.core.library.get_cached(rid) or {}
+            url = (info.get("thumb") if self.size <= 150 else None) or info.get("cover") or info.get("thumb")
         if not url:
             return None
         first = rid not in self.waiting

@@ -20,6 +20,7 @@ from discord_ipc import PresenceWorker
 from hangout import Hangout
 from lastfm import LastFM
 from tv import TV
+from value import CollectionValue
 from videos import VideoFinder
 from server_bot import BotRunner
 from metadata import USER_AGENT, CollectionError, Library, clean_name, fetch_collection, norm, side_name
@@ -99,6 +100,13 @@ DEFAULT_CONFIG = {
     "hangout_page": False,  # a member page at vinylhangout.com/u/<hangout_page_name>
     "hangout_page_name": "",
     "hangout_page_published": False,  # so switching the page off removes it from the site, even after a restart
+    "status_page_button": True,
+    # Want-list matches: your collection and Discogs want list, shared with Vinyl Hangout members
+    "hangout_matches": False,
+    "hangout_matches_published": False,  # a "My Vinyl Hangout page" button on your status (only with a member page)
+    # What the collection is worth, from Discogs marketplace prices
+    "value_enabled": False,
+    "value_currency": "",  # empty: the currency of Windows' region settings
     "install_id": "",  # random, made on the first run; only identifies this install to the site
 }
 # The shared "Vinyl Presence" Discord application. Used when you haven't entered your own
@@ -243,6 +251,7 @@ class Core:
         self._sync_wake = threading.Event()
         self.library = Library(DATA / "releases.json", lambda: self.config.get("discogs_token", "").strip())
         self.lastfm = LastFM(self, DATA / "scrobbles.json")
+        self.value = CollectionValue(self, DATA / "prices.json")
         self.videos = VideoFinder(DATA / "videos.json", lambda: self.config.get("discogs_token", "").strip())
         self.tv = TV()
         self.discord = PresenceWorker()
@@ -393,7 +402,8 @@ class Core:
             self.load_collection()  # the last sync of that user, or back to the CSV
             self.sync_now()
         self.player.push()
-        self.hangout.wake.set()
+        self.hangout.poke()
+        self.value.wake.set()
 
     def add_history(self, rid):
         self.history = [{"id": int(rid), "at": int(time.time())}] + self.history[:19999]
@@ -733,8 +743,12 @@ class Player:
                 act["assets"]["large_text"] = clip(large_text or rec["title"])
             if not act["assets"]:
                 del act["assets"]
-            if cfg.get("show_discogs_button", True):
-                act["buttons"] = [{"label": "View on Discogs", "url": url}]
+            buttons = [{"label": "View on Discogs", "url": url}] if cfg.get("show_discogs_button", True) else []
+            page = cfg.get("hangout_page_name")
+            if page and cfg.get("hangout_page") and cfg.get("hangout_page_published") and cfg.get("status_page_button"):
+                buttons.append({"label": "My Vinyl Hangout page", "url": f"https://vinylhangout.com/u/{page}"})
+            if buttons:
+                act["buttons"] = buttons
             sides = list(n["sides"])
             if cfg.get("show_side_count", True) and len(sides) > 1 and n["side"] in sides:
                 # Discord shows a party's size after the artist: "Pink Floyd (2 of 4)"

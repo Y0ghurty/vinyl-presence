@@ -29,10 +29,12 @@ import tray
 import tv
 import videos
 import updater
+import value as collection_value
 from core import ASSETS, DATA, ROOT, SHARED_APP_ID, Core, search
 from covers import CoverGrid, ThumbCache
 from metadata import USER_AGENT, side_name
 from stats_view import StatsWindow
+from wantlist_view import WantListWindow
 from theme import ACCENT, ACCENT_DIM, ACCENT_HI, BAD, BG, FAINT, FONT, GOOD, LINE, MUTED, PANEL, PANEL2, ROW_ALT, TEXT, WARN
 from version import VERSION
 
@@ -41,7 +43,7 @@ try:
 except ImportError:  # covers in the window need Pillow; everything else works without it
     Image = None
 
-SUPPORT_DISCORD = "https://discord.gg/xHj9Td7MYz"  # Vinyl Hangout: questions & help
+SUPPORT_DISCORD = "https://discord.gg/vinylhangout"  # Vinyl Hangout: questions & help
 SHOW_REQUEST = DATA / "show.request"  # a second start drops this file to bring the window back
 SORTS = ["Artist A–Z", "Title A–Z", "Recently added", "Recently played", "Most played", "Not played lately"]
 CARD_TITLES = {
@@ -192,6 +194,7 @@ class VinylApp:
         self.btn(top, "⚙  Settings", self.open_settings).pack(side="right")
         self.btn(top, "Help", lambda: webbrowser.open(SUPPORT_DISCORD), kind="ghost").pack(side="right", padx=(0, px(6)))
         self.btn(top, "Stats", self.open_stats, kind="ghost").pack(side="right", padx=(0, px(6)))
+        self.btn(top, "Want list", self.open_wantlist, kind="ghost").pack(side="right", padx=(0, px(6)))
         pill = tk.Frame(top, bg=BG, cursor="hand2")
         pill.pack(side="right", padx=px(16))
         self.dc_dot = tk.Label(pill, text="●", bg=BG, fg=WARN, font=(FONT, 10), cursor="hand2")
@@ -941,8 +944,11 @@ class VinylApp:
         self.detail_cover.config(image=img or "")
         self.detail_title.config(text=rec["title"])
         self.detail_artist.config(text=rec["artist"])
-        self.detail_meta.config(text=" · ".join(x for x in (rec["year"], rec["label"], short_format(rec["format"]))
-                                                 if x))
+        meta = [rec["year"], rec["label"], short_format(rec["format"])]
+        price = self.core.value.price(rid) if self.core.config.get("value_enabled") else None
+        if price and price[0] is not None:
+            meta.append(f"from {collection_value.money(price[0], self.core.value.currency())} on Discogs")
+        self.detail_meta.config(text=" · ".join(x for x in meta if x))
         info = self.core.library.get_cached(rid) or {}
         tracks = info.get("tracks") or []
         sides = list(dict.fromkeys(t["side"] for t in tracks))
@@ -1502,6 +1508,17 @@ class VinylApp:
         self.btn(stylus_row, "I fitted a new stylus", new_stylus, size=9).pack(side="left", padx=(px(12), 0))
         f.row += 1
 
+        tk.Frame(f, bg=LINE, height=1).grid(row=f.row, column=0, columnspan=2, sticky="ew", pady=px(14))
+        f.row += 1
+        v_value = tk.BooleanVar(value=cfg["value_enabled"])
+        check(f, "Show what my collection is worth (from prices on the Discogs marketplace)", v_value, column=0)
+        f.row += 1
+        v_currency = tk.StringVar(value=cfg["value_currency"] or collection_value.default_currency())
+        label(f, "Currency", "Prices are looked up slowly in the background; the first time takes a while.")
+        ttk.Combobox(f, textvariable=v_currency, values=collection_value.CURRENCIES, state="readonly", width=6,
+                     font=(FONT, 10)).grid(row=f.row, column=1, sticky="w")
+        f.row += 2
+
         # ---- Sharing & tray
         f = tab("Sharing & tray")
         tk.Label(f, text="Now spinning channel", bg=BG, fg=TEXT, font=(FONT, 11, "bold"), anchor="w").grid(
@@ -1573,6 +1590,13 @@ class VinylApp:
               hint_color=BAD if page_error else FAINT)
         self.make_entry(f, v_page_name, width=24).grid(row=f.row, column=1, sticky="w", ipady=px(3))
         f.row += 2
+        v_page_button = tk.BooleanVar(value=cfg["status_page_button"])
+        check(f, "Add a “My Vinyl Hangout page” button to my Discord status", v_page_button)
+        f.row += 1
+        v_matches = tk.BooleanVar(value=cfg["hangout_matches"])
+        check(f, "Want-list matches: share my collection and Discogs want list with Vinyl Hangout members",
+              v_matches, column=0)
+        f.row += 1
         v_count = tk.BooleanVar(value=cfg["hangout_count"])
         check(f, "Count me in the number of Vinyl Presence users (anonymous)", v_count, column=0)
         f.row += 1
@@ -1845,7 +1869,7 @@ class VinylApp:
         # What the settings were when the window opened (or last saved), to spot unsaved changes
         watched = [v_client, v_card, v_card_text, v_status, v_button, v_asset, v_user, v_token, v_auto, v_flip,
                    v_share, v_hook, v_tray, v_startup, v_bot, v_bot_token, v_lfm, v_tv, v_tv_device, v_tv_muted,
-                   v_tv_follow, v_own, v_sides, v_flip_remind, v_life, v_start, v_live, v_post, v_page, v_page_name, v_count]
+                   v_tv_follow, v_own, v_sides, v_flip_remind, v_life, v_start, v_live, v_post, v_page, v_page_name, v_count, v_page_button, v_value, v_currency, v_matches]
         baseline = {str(v): v.get() for v in watched}
 
         def close_settings():
@@ -1915,6 +1939,8 @@ class VinylApp:
                 "tv_follow": v_tv_follow.get(),
                 "hangout_live": v_live.get(), "hangout_post": v_post.get(), "hangout_count": v_count.get(),
                 "hangout_page": v_page.get(), "hangout_page_name": page_name,
+                "status_page_button": v_page_button.get(), "hangout_matches": v_matches.get(),
+                "value_enabled": v_value.get(), "value_currency": v_currency.get(),
             })
             if v_page.get() and (page_name != cfg_before_page or not self.core.config["hangout_page_published"]):
                 self._publish_page()
@@ -2052,6 +2078,14 @@ class VinylApp:
             self.tray.notify("Vinyl Presence keeps running here, so your status stays on. "
                              "Right-click the record icon to quit.", "Still spinning")
             self.core.update_config({"tray_hint_shown": True})
+
+    def open_wantlist(self):
+        win = getattr(self, "wantlist_win", None)
+        if win and win.win.winfo_exists():
+            win.load()
+            win.win.lift()
+            return
+        self.wantlist_win = WantListWindow(self)
 
     def open_stats(self):
         if self.stats_win and self.stats_win.win.winfo_exists():

@@ -210,7 +210,8 @@ class PresenceWorker(threading.Thread):
                     name = user.get("global_name") or user.get("username")
                     avatar = (f"https://cdn.discordapp.com/avatars/{user['id']}/{user['avatar']}.png?size=128"
                               if user.get("id") and user.get("avatar") else None)
-                    self.status = {"state": "connected", "user": name, "avatar": avatar, "error": None}
+                    self.status = {"state": "connected", "user": name, "id": user.get("id"), "avatar": avatar,
+                                   "error": None}
                     print(f"[discord] connected as {name}")
                     self._cleared = False
                 if activity is None and self._cleared:
