@@ -7,15 +7,10 @@ on:
 
 permissions:
   contents: write
-  actions: read
 
 jobs:
   build:
     runs-on: windows-latest
-    env:
-      # Code signing through SignPath Foundation, once it's set up (see "Code signing policy" in the README).
-      # Without the SIGNPATH_API_TOKEN secret the exe is published unsigned, like before.
-      SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
     steps:
       - uses: actions/checkout@v7
 
@@ -51,38 +46,9 @@ jobs:
       - name: Build exe
         run: pyinstaller --noconfirm --onefile --windowed --name VinylPresence --icon assets/vinyl.png --version-file version_info.txt --add-data "assets;assets" --hidden-import pystray._win32 app.py
 
-      - name: Upload unsigned exe for signing
-        if: env.SIGNPATH_API_TOKEN != ''
-        id: unsigned
-        uses: actions/upload-artifact@v7
-        with:
-          name: VinylPresence-unsigned
-          path: dist/VinylPresence.exe
-          archive: false
-
-      - name: Sign with SignPath
-        # Waits until the release is approved in SignPath, then puts the signed exe in dist/signed.
-        if: env.SIGNPATH_API_TOKEN != ''
-        uses: signpath/github-action-submit-signing-request@v3
-        with:
-          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
-          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
-          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
-          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
-          github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
-          skip-decompress: true
-          wait-for-completion: true
-          wait-for-completion-timeout-in-seconds: 3600
-          output-artifact-directory: dist/signed
-
-      - name: Use the signed exe
-        if: env.SIGNPATH_API_TOKEN != ''
-        shell: bash
-        run: mv -f dist/signed/VinylPresence.exe dist/VinylPresence.exe
-
       - name: Publish release
         uses: softprops/action-gh-release@v3
         with:
           files: dist/VinylPresence.exe
           generate_release_notes: true
-          body: "Download **VinylPresence.exe** below. · [Code signing policy](https://github.com/${{ github.repository }}#code-signing-policy)"
+          body: "Download **VinylPresence.exe** below. · [License](https://github.com/${{ github.repository }}/blob/main/LICENSE)"

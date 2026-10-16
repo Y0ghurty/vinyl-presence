@@ -15,7 +15,7 @@ print(f"""VSVersionInfo(
       StringStruct('FileDescription', 'Vinyl Presence'),
       StringStruct('FileVersion', '{version}'),
       StringStruct('InternalName', 'VinylPresence'),
-      StringStruct('LegalCopyright', 'MIT License'),
+      StringStruct('LegalCopyright', 'CC BY-NC-ND 4.0'),
       StringStruct('OriginalFilename', 'VinylPresence.exe'),
       StringStruct('ProductName', 'Vinyl Presence'),
       StringStruct('ProductVersion', '{version}')])]),

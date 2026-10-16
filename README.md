@@ -261,20 +261,8 @@ Found a bug? [Open an issue](https://github.com/Y0ghurty/vinyl-presence/issues).
 2. Quit Vinyl Presence (right-click the tray icon → **Quit**) and delete `VinylPresence.exe`.
 3. Delete the folder `%APPDATA%\Vinyl Presence` (your settings, history and cached covers).
 
-## Code signing policy
-
-Windows releases are built from the source code in this repository by GitHub Actions (see the
-[release workflow](.github/workflows/release.yml)), and every release is approved by hand before it's signed.
-
-Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by
-[SignPath Foundation](https://signpath.org/). *We've applied; until that's approved, releases are unsigned.*
-
-- **Committers and reviewers:** [Y0ghurty](https://github.com/Y0ghurty)
-- **Approvers:** [Y0ghurty](https://github.com/Y0ghurty)
-
-**Privacy policy:** Vinyl Presence only sends information to other computers as described in
-[What goes online](#what-goes-online).
-
 ## License
 
-[MIT](LICENSE)
+[CC BY-NC-ND 4.0](LICENSE): you may use Vinyl Presence and share it for free, crediting it, but not sell it
+or share changed versions of it. Improvements are welcome as pull requests. Versions up to 1.13.0 were
+released under the MIT License.
