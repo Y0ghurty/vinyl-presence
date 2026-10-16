@@ -11,7 +11,11 @@ Each with its own switch in Settings → Sharing & tray:
   this month's listening stats, your top records and artists, and what you spun recently.
 - Want-list matches (off by default): your collection (release numbers) and your Discogs want list, so members
   see who in the Hangout has a record they're looking for, and who's looking for one you have.
+- Share my Vinyl Wrapped (off by default): your Wrapped pictures (this month, this year, all time), so /wrapped
+  can post them in the Vinyl Hangout server.
 """
+import base64
+import io
 import json
 import os
 import re
@@ -32,6 +36,7 @@ HEARTBEAT_SECONDS = 240   # the site drops a record after 10 minutes without new
 RETRY_SECONDS = 120       # when the site can't be reached
 PAGE_EVERY = 3600         # the member page is refreshed at least this often (and whenever a record starts)
 SHELF_EVERY = 6 * 3600   # the want list is fetched again, and the shelf resent, this often
+WRAPPED_EVERY = 2 * 3600  # fresh Wrapped pictures for /wrapped this often
 PAGE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{1,22}[a-z0-9]$")
 
 
@@ -72,11 +77,14 @@ class Hangout:
         self.wake = threading.Event()
         self.page_wake = threading.Event()
         self.shelf_wake = threading.Event()
+        self.wrapped_wake = threading.Event()
+        self.wrapped_error = None  # why the site refused the pictures, e.g. a Discord account shared from elsewhere
         self.wants = None  # your Discogs want list, once fetched
         self._wants_for, self._wants_at = None, 0
         self._shelf_key, self._shelf_at = None, 0
         threading.Thread(target=self._loop, daemon=True, name="hangout").start()
         threading.Thread(target=self._shelf_loop, daemon=True, name="want-list").start()
+        threading.Thread(target=self._wrapped_loop, daemon=True, name="wrapped-share").start()
         # The member page has its own thread, so making it can never hold up reporting a record
         threading.Thread(target=self._page_loop, daemon=True, name="member-page").start()
 
@@ -85,6 +93,7 @@ class Hangout:
         self.wake.set()
         self.page_wake.set()
         self.shelf_wake.set()
+        self.wrapped_wake.set()
 
     def _page_loop(self):
         time.sleep(15)
@@ -277,6 +286,52 @@ class Hangout:
         print(f"[hangout] {time.strftime('%H:%M:%S')} shared {len(have)} records and {len(self.wants)} wants for matches")
         if not cfg.get("hangout_matches_published"):
             core.update_config({"hangout_matches_published": True})
+
+    # -- Vinyl Wrapped for /wrapped
+
+    def _wrapped_loop(self):
+        time.sleep(40)
+        while True:
+            try:
+                self._wrapped()
+            except (OSError, ValueError) as e:
+                print(f"[hangout] Wrapped: {e}")
+                self.wrapped_wake.wait(600)
+            self.wrapped_wake.wait(WRAPPED_EVERY)
+            self.wrapped_wake.clear()
+
+    def _wrapped(self):
+        cfg, core = self.core.config, self.core
+        status = core.discord.status
+        if not cfg.get("hangout_wrapped"):
+            if cfg.get("hangout_wrapped_published"):
+                _post("wrapped_upload.php", {"id": cfg["install_id"], "action": "delete"})
+                core.update_config({"hangout_wrapped_published": False})
+                print("[hangout] Wrapped pictures removed from vinylhangout.com")
+            return
+        if status.get("state") != "connected" or not status.get("id"):
+            return  # /wrapped finds your pictures by your Discord account
+        try:
+            import wrapped
+        except ImportError:
+            return  # no Pillow, no pictures
+        images, labels = {}, {}
+        for key, period in (("month", "This month"), ("year", "This year"), ("all", "All time")):
+            buf = io.BytesIO()
+            wrapped.make(core, period).convert("RGB").save(buf, "JPEG", quality=88, optimize=True)
+            images[key] = base64.b64encode(buf.getvalue()).decode("ascii")
+            labels[key] = wrapped.period_label(period)
+        try:
+            _post("wrapped_upload.php", {"id": cfg["install_id"], "discord_id": status["id"], "name": status["user"],
+                                         "images": images, "labels": labels})
+        except urllib.error.HTTPError as e:
+            self.wrapped_error = _error(e)
+            print(f"[hangout] Wrapped refused: {self.wrapped_error}")
+            return
+        self.wrapped_error = None
+        print(f"[hangout] {time.strftime('%H:%M:%S')} shared fresh Wrapped pictures for /wrapped")
+        if not cfg.get("hangout_wrapped_published"):
+            core.update_config({"hangout_wrapped_published": True})
 
     def matches(self):
         """Your matches from vinylhangout.com: {"want_owned", "have_wanted", "members"}. Raises OSError offline."""

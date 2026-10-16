@@ -116,6 +116,7 @@ aren't, it shows the album with an elapsed timer.
 | Import Discogs CSV | Load a newer export after you buy records |
 | Collection value | Off by default. Looks up what each record sells for on Discogs (slowly, in the background, refreshed weekly) and shows the total in *Stats*, with **Most valuable…** and the price in a record's details. Pick the currency next to it |
 | Post what I play | Posts each record you play (after 30 seconds) to a Discord channel through its webhook URL |
+| Share my Vinyl Wrapped | Off by default. Lets `/wrapped` post your Wrapped picture in the Vinyl Hangout server |
 | Want-list matches | Off by default. Shares your collection and Discogs want list with the Vinyl Hangout members who switched it on too; **Want list** (top of the app) shows the matches |
 | Live page, member page | *Settings → Sharing & tray*, all off by default: show what you play on vinylhangout.com, post it in the Vinyl Hangout Discord, and your own page at vinylhangout.com/u/*name*, with a **My Vinyl Hangout page** button on your status |
 | Keep running in the tray | Closing the window hides it to the tray instead of quitting |
@@ -179,6 +180,9 @@ with Windows).
 - **Want-list matches:** only if you switch on *Want-list matches*: your collection's release numbers and your
   Discogs want list (titles and covers), with your Discord name and user ID, so matching members see who has or
   wants what, and a record for sale in the Vinyl Hangout server can mention you. Switch it off and it's removed.
+- **Vinyl Wrapped for /wrapped:** only if you switch on *Share my Vinyl Wrapped*: your Wrapped pictures (this
+  month, this year, all time), every two hours, with your Discord name and user ID, so `/wrapped` can post them
+  in the Vinyl Hangout server. Switch it off and they're removed.
 - **Discogs marketplace:** only if you switch on *Collection value*: each record's release number, to look up
   its lowest price on Discogs (once a week). With a Discogs token, also Discogs' estimate of your collection.
 

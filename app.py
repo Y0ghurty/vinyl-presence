@@ -1597,6 +1597,13 @@ class VinylApp:
         check(f, "Want-list matches: share my collection and Discogs want list with Vinyl Hangout members",
               v_matches, column=0)
         f.row += 1
+        v_wrapped = tk.BooleanVar(value=cfg["hangout_wrapped"])
+        check(f, "Share my Vinyl Wrapped with Vinyl Hangout, so /wrapped can post it in the server", v_wrapped, column=0)
+        f.row += 1
+        if self.core.hangout.wrapped_error:
+            tk.Label(f, text=self.core.hangout.wrapped_error, bg=BG, fg=BAD, font=(FONT, 8), anchor="w").grid(
+                row=f.row, column=0, columnspan=2, sticky="w", padx=(px(26), 0))
+            f.row += 1
         v_count = tk.BooleanVar(value=cfg["hangout_count"])
         check(f, "Count me in the number of Vinyl Presence users (anonymous)", v_count, column=0)
         f.row += 1
@@ -1869,7 +1876,7 @@ class VinylApp:
         # What the settings were when the window opened (or last saved), to spot unsaved changes
         watched = [v_client, v_card, v_card_text, v_status, v_button, v_asset, v_user, v_token, v_auto, v_flip,
                    v_share, v_hook, v_tray, v_startup, v_bot, v_bot_token, v_lfm, v_tv, v_tv_device, v_tv_muted,
-                   v_tv_follow, v_own, v_sides, v_flip_remind, v_life, v_start, v_live, v_post, v_page, v_page_name, v_count, v_page_button, v_value, v_currency, v_matches]
+                   v_tv_follow, v_own, v_sides, v_flip_remind, v_life, v_start, v_live, v_post, v_page, v_page_name, v_count, v_page_button, v_value, v_currency, v_matches, v_wrapped]
         baseline = {str(v): v.get() for v in watched}
 
         def close_settings():
@@ -1940,6 +1947,7 @@ class VinylApp:
                 "hangout_live": v_live.get(), "hangout_post": v_post.get(), "hangout_count": v_count.get(),
                 "hangout_page": v_page.get(), "hangout_page_name": page_name,
                 "status_page_button": v_page_button.get(), "hangout_matches": v_matches.get(),
+                "hangout_wrapped": v_wrapped.get(),
                 "value_enabled": v_value.get(), "value_currency": v_currency.get(),
             })
             if v_page.get() and (page_name != cfg_before_page or not self.core.config["hangout_page_published"]):

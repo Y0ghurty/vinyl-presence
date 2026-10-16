@@ -103,7 +103,10 @@ DEFAULT_CONFIG = {
     "status_page_button": True,
     # Want-list matches: your collection and Discogs want list, shared with Vinyl Hangout members
     "hangout_matches": False,
-    "hangout_matches_published": False,  # a "My Vinyl Hangout page" button on your status (only with a member page)
+    "hangout_matches_published": False,
+    # Vinyl Wrapped pictures shared with vinylhangout.com, so /wrapped can post them in the server
+    "hangout_wrapped": False,
+    "hangout_wrapped_published": False,  # a "My Vinyl Hangout page" button on your status (only with a member page)
     # What the collection is worth, from Discogs marketplace prices
     "value_enabled": False,
     "value_currency": "",  # empty: the currency of Windows' region settings
