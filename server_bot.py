@@ -203,7 +203,7 @@ class NowSpinningBot(discord.Client if discord else object):
         self.tree.add_command(group)
 
     async def setup_hook(self):
-        await self.tree.sync()  # global copy; per-server copies below appear instantly
+        await self.tree.sync()  # one set of commands for every server the bot is in
 
     async def on_ready(self):
         print(f"[bot] online as {self.user} in {len(self.guilds)} server(s)")
@@ -273,11 +273,13 @@ class NowSpinningBot(discord.Client if discord else object):
         return bool(last) and last["key"] == str(key)  # never the same record twice in a row
 
     async def _sync_guild(self, guild):
+        """Remove the per-server copies of the commands that older versions added: with the global set
+        they showed up twice."""
         try:
-            self.tree.copy_global_to(guild=guild)
+            self.tree.clear_commands(guild=guild)
             await self.tree.sync(guild=guild)
         except discord.HTTPException as e:
-            print(f"[bot] couldn't add commands to {guild.name}: {e}")
+            print(f"[bot] couldn't tidy up the commands in {guild.name}: {e}")
 
     async def on_presence_update(self, before, after):
         self._maybe_give_role(after)
